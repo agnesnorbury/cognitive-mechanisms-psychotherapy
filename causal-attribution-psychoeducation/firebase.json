@@ -1,0 +1,22 @@
+{
+  "hosting": {
+    "site": "modcomp-ca2",
+    "public": "public",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ]
+  },
+  "emulators": {
+    "hosting": {
+      "port": 5050
+    },
+    "ui": {
+      "enabled": false
+    }
+  },
+  "firestore": {
+    "rules": "firestore.rules"
+  }
+}

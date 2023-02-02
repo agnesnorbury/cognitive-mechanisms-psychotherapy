@@ -1,0 +1,320 @@
+---
+title: "modComp study psychoeducation intervention model-based analysis of choice task from pilot data"
+output:
+  html_document:
+    html-math-method:
+      method: mathjax
+  #  pdf_document:
+  # extra_dependencies: ["bbm"]
+  # fig_caption: yes
+---
+
+```{r setup, include=FALSE}
+# knitr options
+knitr::opts_chunk$set(echo=FALSE, error=TRUE, warning=FALSE, message=FALSE, fig.align='center')
+
+# load packages
+packages <- c("rstan", "dplyr", "tidyr", "bayesplot", "loo", "hBayesDM", "tidybayes", "forcats",
+              "ggpmisc", "patchwork", "devtools", "reshape2", "ggExtra", "unikn", "svglite",
+              "lme4", "glmnet", "ggcorrplot", "subscore")
+if (length(setdiff(packages, rownames(installed.packages()))) > 0 ) {
+  install.packages(setdiff(packages, rownames(installed.packages())))
+}
+lapply(packages, require, character.only=TRUE)
+
+# set wd
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+# what task version to filter for
+task_ver <- "causal-attr-pe-1"      #"causal-attr-pe-2"
+
+# create figures subdir
+subdir <- "figures"
+if (!file.exists(subdir)){
+  dir.create(file.path(dirname(rstudioapi::getActiveDocumentContext()$path), subdir))
+}
+```
+
+```{r setup_rstan}
+rstan_options(auto_write = TRUE)   # write the models so we don't have to recompile each time
+nCores <- parallel::detectCores()    # get number of cores available for parallelisation
+```
+
+```{r setup_colour_scales}
+# lets set some custom colour scales for our plots using unikn
+#seecol(pal_unikn_pair)
+palette2 <- usecol(pal_unikn_pair)
+# colours by intervention group
+colours3 <- c(#"planning" = palette2[11],
+              #"control" = palette2[10],            # planning control
+              "psychoeducation" = palette2[2],
+              "control" = palette2[3]               # psychoed control
+              )
+# colours by model parameter type
+colours2 <- c("group mean" = palette2[14],
+              "intervention effect" = palette2[2],
+              "baseline effect" = palette2[4]
+              )
+```
+
+```{r load_data}
+# load long format data
+data_long_all <- read.csv(file=paste0("./", task_ver, "-choice-task-data-long.csv")) %>%
+  dplyr::select(-X) %>%
+  arrange(subID, taskNo, itemNo) %>%
+  mutate(sess = taskNo + 1)
+
+## get number of time points etc
+nPpts <- length(unique(data_long_all$subID))
+nTimes <- max(data_long_all$sess)
+subIDs <- data_long_all %>%
+  group_by(subID) %>%
+  summarize() %>%
+  mutate(ID=seq(1, nPpts, 1))   # add sequential numeric IDs for compatibility with rstan output    
+data_long_all <- merge(data_long_all, subIDs, by="subID") %>%
+  mutate(neg_pos=ifelse(valence=="positive",1,0)) %>%
+  rename("ID" = ID.y)
+
+nTrials_all <- data_long_all %>%
+  group_by(subID, sess) %>%
+  summarize(nTrials = n())
+nTrials_max <- nTrials_all %>%
+  {max(.$nTrials)}
+
+# get lists of subjects IDs by condition for use with other data
+control_subs <- data_long_all %>%
+  filter(condition=="control") %>%
+  dplyr::select(subID, ID)
+controls <- as.list(unique(control_subs$subID))
+control_IDs <- as.list(unique(control_subs$ID))
+
+# get ordered list of intervention conditions
+int_conds <- data_long_all %>%
+  arrange(ID) %>%
+  group_by(ID) %>%
+  dplyr::select(ID, condition) %>%
+  distinct() %>%
+  mutate(condition01 = ifelse(condition=="psychoed", 1, 0))
+```
+
+
+```{r stan_int_models_IG}
+## specify model, session, data to fit, and params to save
+model <- "m_bernoulli_negpos_IGcorr2_multisess_intervention_additive"
+
+## create arrays of choice options and responses for each participant and time point
+internalChosen_neg <- internalChosen_pos <- globalChosen_neg <- globalChosen_pos <- array(0, dim = c(nPpts, nTimes, nTrials_max/2))
+nT_ppts <- array(nTrials_max, dim = c(nPpts, nTimes))
+for (i in 1:nPpts) {
+  for (t in 1:nTimes) {
+  internalChosen_neg[i,t,] <- with(data_long_all, internalChosen[ID==i & sess==t & neg_pos==0])
+  internalChosen_pos[i,t,] <- with(data_long_all, internalChosen[ID==i & sess==t & neg_pos==1])
+  globalChosen_neg[i,t,] <- with(data_long_all, globalChosen[ID==i & sess==t & neg_pos==0])
+  globalChosen_pos[i,t,] <- with(data_long_all, globalChosen[ID==i & sess==t & neg_pos==1])
+  }
+}
+## create list to pass to stan
+data_list = list(
+  nTimes = nTimes,
+  nPpts = nPpts,
+  nTrials_max = nTrials_max/2,         # max number of trials per  session per participant
+  nT_ppts = nT_ppts,                   # actual number of trials per session per participant
+  condition = int_conds$condition01,   # 0 = control, 1 = psychoed
+  internal_neg = internalChosen_neg,
+  internal_pos = internalChosen_pos,
+  global_neg = globalChosen_neg,
+  global_pos = globalChosen_pos
+)
+
+## fit model using rstan
+fit <- stan(
+  file = paste0("./stan-models/", model, ".stan"),
+  data = data_list,
+  chains = 4,               # run 4 separate chains to assess convergence
+  warmup = 1000,            # these are used to tune the sampler and ’burn in’
+  iter = 2000,              # number of iterations (#kept = chains*(iter - warmup))
+  cores = nCores            # chains to be run in parallel on separate cores (if possible)
+)
+
+## save
+saveRDS(fit, file = paste0("./stan-fits/", model ,"-", task_ver, "-fit.rds"))
+
+# summary of sampling diagnostics
+check_hmc_diagnostics(fit)
+
+# plot pairs of sampling distributions for an example participant
+pairs(fit, pars=c("theta_internal_neg[1,1]", "theta_internal_neg[2,1]",
+                  "theta_global_neg[1,1]",   "theta_global_neg[2,1]"))
+pairs(fit, pars=c("theta_internal_pos[1,1]", "theta_internal_pos[2,1]",
+                  "theta_global_pos[1,1]",   "theta_global_pos[2,1]"))
+
+# plot pairs of sampling distributions for the group level means
+pairs(fit, pars=c("mu_internal_theta_neg[1]", "mu_internal_theta_neg[2]",
+                  "mu_global_theta_neg[1]",   "mu_global_theta_neg[2]"))
+pairs(fit, pars=c("mu_internal_theta_pos[1]", "mu_internal_theta_pos[2]",
+                  "mu_global_theta_pos[1]",   "mu_global_theta_pos[2]"))
+
+# plot intervention and individual t2 a[irs ]
+pairs(fit, pars=c("theta_int_internal_neg", "theta_int_global_neg"))
+pairs(fit, pars=c("theta_int_internal_pos", "theta_int_global_pos"))
+```
+  
+```{r int_IG_plot}
+## load model
+model <- "m_bernoulli_negpos_IGcorr2_multisess_intervention_additive"
+fit <- readRDS(file = paste0("./stan-fits/", model ,"-",  task_ver, "-fit.rds"))
+
+# test-retest posteriors
+R_theta_neg <- as.data.frame(summary(fit, pars = c("R_theta_neg"))$summary)
+R_theta_pos <- as.data.frame(summary(fit, pars = c("R_theta_pos"))$summary)
+
+# print mean and mean se for each parameter
+# across parameters
+print(paste0("R for internal-global attributions for negative items at t1 (mean): ", 
+             round(R_theta_neg$mean[2],2)), quote=FALSE)
+print(paste0("R for internal-global attribtutions for negative items at t1 (mean SE): ",
+             round(R_theta_neg$se_mean[2],3)), quote=FALSE)
+
+print(paste0("R for internal-global attributions for positive items at t1 (mean): ", 
+             round(R_theta_pos$mean[2],2)), quote=FALSE)
+print(paste0("R for internal-global attribtutions for positive items at t1 (mean SE): ",
+             round(R_theta_pos$se_mean[2],3)), quote=FALSE)
+
+print(paste0("R for internal-global attributions for negative items at t2 (mean): ", 
+             round(R_theta_neg$mean[12],2)), quote=FALSE)
+print(paste0("R for internal-global attribtutions for negative items at t2 (mean SE): ",
+             round(R_theta_neg$se_mean[12],3)), quote=FALSE)
+
+print(paste0("R for internal-global attributions for positive items at t2 (mean): ", 
+             round(R_theta_pos$mean[12],2)), quote=FALSE)
+print(paste0("R for internal-global attribtutions for positive items at t2 (mean SE): ",
+             round(R_theta_pos$se_mean[12],3)), quote=FALSE)
+
+# across time points
+print(paste0("R for internal attributions for negative items t1-t2 (mean): ", 
+             round(R_theta_neg$mean[3],2)), quote=FALSE)
+print(paste0("R for internal attributions for negative items t1-t2 (mean SE): ",
+             round(R_theta_neg$se_mean[3],3)), quote=FALSE)
+
+print(paste0("R for internal attributions for positive items t1-t2 (mean): ", 
+             round(R_theta_pos$mean[3],2)), quote=FALSE)
+print(paste0("R for internal attributions for positive items t1-t2 (mean SE): ",
+             round(R_theta_pos$se_mean[3],3)), quote=FALSE)
+
+print(paste0("R for global attributions for negative items t1-t2 (mean): ", 
+             round(R_theta_neg$mean[8],2)), quote=FALSE)
+print(paste0("R for global attributions for negative items t1-t2 (mean SE): ",
+             round(R_theta_neg$se_mean[8],3)), quote=FALSE)
+
+print(paste0("R for global attributions for positive items t1-t2 (mean): ", 
+             round(R_theta_pos$mean[8],2)), quote=FALSE)
+print(paste0("R for global attributions for positive items t1-t2 (mean SE): ",
+             round(R_theta_pos$se_mean[8],3)), quote=FALSE)
+
+# plot mean param ests session 1 vs 2
+posts <- as.data.frame(summary(fit,
+                       pars = c("p_internal_pos", "p_internal_neg", 
+                                "p_global_pos", "p_global_neg"))$summary) %>%
+  dplyr::select(mean, sd) %>%
+  add_rownames(var = "var") %>%
+  separate(var, sep="\\[|\\,|\\]", into=c("parameter", "ID", "session"),
+           remove=TRUE, extra="drop") %>%
+  separate(parameter, sep=-3, into=c("parameter", "item_valence")) %>%
+  mutate(parameter = sub("l_", "l", parameter),
+         parameter = factor(parameter, levels = c("p_internal", "p_global")))
+
+## plot
+p1 <- posts %>%
+  pivot_wider(id_cols=c("ID", "parameter", "item_valence"),
+              names_from = "session", values_from = c("mean", "sd")) %>%
+  mutate(condition = ifelse(ID %in% control_IDs, "control", "psychoeducation")) %>%
+  ggplot(aes(x=mean_1, y=mean_2, group=condition, colour=condition)) +
+  geom_abline(slope = 1, linetype="dashed", colour="grey") +
+  geom_smooth(method = "lm", se=FALSE, formula = y ~ x) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = mean_1-sd_1, xmax = mean_1+sd_1), alpha=.4) +
+  geom_errorbar(aes(ymin = mean_2-sd_2, ymax = mean_2+sd_2), alpha=.4) +
+  scale_colour_manual(values=colours3) + 
+  scale_fill_manual(values=colours3) +
+  labs(x = "mean (sd) time 1", y ="mean (sd) time 2") +
+  theme_minimal() + facet_grid(cols=vars(item_valence), rows=vars(parameter)) + 
+  theme(aspect.ratio=4/3.5)
+print(p1)
+# ggsave(filename = paste0("./figures/", task_ver, "-params-by-time.svg"),
+#        plot = last_plot(), device = "svg", dpi = 300)
+
+# plot group-level posterior parameter estimates using tidybayes pakcage (quick and pretty!)
+fit_tidy <- fit %>% 
+  gather_draws(`mu_internal_theta_neg[1]`, `mu_internal_theta_neg[2]`, 
+               `mu_internal_theta_pos[1]`, `mu_internal_theta_pos[2]`,
+               `mu_global_theta_neg[1]`,   `mu_global_theta_neg[2]`, 
+               `mu_global_theta_pos[1]`,   `mu_global_theta_pos[2]`, 
+               theta_int_internal_neg, theta_int_internal_pos,
+               theta_int_global_neg,   theta_int_global_pos) %>%
+  mutate(var_type = ifelse(grepl("_int_", .variable), "intervention effect", "group mean"),
+         var_type = factor(var_type, levels = c("group mean", "intervention effect")),
+         .variable = factor(.variable, levels = c(
+           "mu_internal_theta_neg[1]", "mu_internal_theta_neg[2]",
+           "mu_internal_theta_pos[1]", "mu_internal_theta_pos[2]",
+           "mu_global_theta_neg[1]",   "mu_global_theta_neg[2]",
+           "mu_global_theta_pos[1]",   "mu_global_theta_pos[2]",
+           "theta_int_internal_neg", "theta_int_internal_pos",
+           "theta_int_global_neg", "theta_int_global_pos")))
+
+p <- fit_tidy %>%
+  ggplot(aes(y = fct_rev(.variable), x = .value, fill = var_type)) +
+  stat_gradientinterval(.width = c(.9, .5),  slab_size = 1) +
+  scale_fill_manual(values = colours2) +
+  geom_vline(xintercept = 0, colour = "grey") + theme_minimal() +
+  theme(legend.position = "none") + theme(aspect.ratio=4/3) + labs(x="", y="")
+p
+# ggsave(filename = paste0("./figures/", task_ver, "-means-ints-CIs-gradient.svg"),
+#        plot = last_plot(), device = "svg", dpi = 300)
+
+# print numerical values for 90% credible intervals (quantile-based)
+params90cis <- summary(fit, pars = c("mu_internal_theta_neg[1]", "mu_internal_theta_neg[2]",
+           "mu_internal_theta_pos[1]", "mu_internal_theta_pos[2]",
+           "mu_global_theta_neg[1]",   "mu_global_theta_neg[2]",
+           "mu_global_theta_pos[1]",   "mu_global_theta_pos[2]",
+           "theta_int_internal_neg", "theta_int_internal_pos",
+           "theta_int_global_neg", "theta_int_global_pos"), probs = c(0.05, 0.95))$summary
+print(params90cis)
+```
+
+```{r pred_acc_int}
+# can look separately for internal_neg, internal_pos, global_neg, global_pos, or concatenate across
+# original data
+y <- with(data_long_all, internalChosen[neg_pos==0])
+
+# extract replicate data generated using posterior parameter estimates
+y_rep <- as.data.frame(summary(fit, pars = c("internal_neg_rep"))$summary) %>%
+  filter(mean>=0) %>%   #remove padded values for trials ppts didn't actually complete
+  dplyr::select(`50%`) %>%
+  add_rownames(var = "var") %>%
+  separate(var, sep="\\[", into=c("variable","tmp"), remove=TRUE, extra="drop") %>%
+  separate(tmp, sep=",", into=c("subID","sess","trial"), remove=TRUE, extra="drop") %>%
+  separate(trial, sep=-1, into="trial", extra="drop") %>%
+  mutate(subID=as.numeric(subID)) %>%
+  arrange(subID) %>%
+  rename(mean_predicted = `50%`)
+
+# predictive accuracy (per sub)
+y_rep <- cbind(y_rep, observed=y)
+accs <- y_rep %>%
+  group_by(subID) %>%
+  mutate(acc = (mean_predicted==observed)) %>%
+  summarise(mean_acc = mean(acc))
+
+# predictive accuracy (overall)
+summ <- accs %>%
+  summarise(mean_pred_acc=round(mean(mean_acc),2), sd_pred_acc=round(sd(mean_acc),2))
+print(summ)
+
+# sum log lik for each participant
+sum_log_liks <- rstan::extract(fit, pars = "sum_log_lik_in")[[1]]
+mean_sum_log_liks <- colMeans(sum_log_liks) # average over samples
+
+# pseudo r2
+# pseudo-r2 can be calculated as 1 - L/C where L = sumloglik over participants and C = likelihood of observing by chance (nTrials*log(0.5))
+pseudo_r2 = 1 - (mean_sum_log_liks/nTrials_max*log(0.5))
+print(mean(pseudo_r2)); print(sd(pseudo_r2))
+```
