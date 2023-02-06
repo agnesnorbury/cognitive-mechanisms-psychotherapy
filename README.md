@@ -7,6 +7,6 @@ Play a demo version of the reward-effort decision-making task here: [coming soon
 
 <img src="./rew-eff-1.gif" width="50%" height="50%"/>
 
-Play a demo version of the causal attribution task here: [coming soon!]
+Play a demo version of the causal attribution task [here](https://modcomp-ca2.web.app/) (no data will be collected).
 
 <img src="./causal-attr-choice.gif" width="50%" height="50%"/>
