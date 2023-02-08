@@ -99,16 +99,16 @@ model {
   mu_internal_theta_pos ~ normal(0,1);
   mu_global_theta_neg   ~ normal(0,1);
   mu_global_theta_pos   ~ normal(0,1);
-    
+  
+  // define priors on individual participant deviations from group parameter values
+  to_vector(pars_pr_neg) ~ normal(0,1);
+  to_vector(pars_pr_pos) ~ normal(0,1);
+  
   // priors on group-level effects of active intervention on theta values at t2
   theta_int_internal_neg ~ normal(0,1);
   theta_int_internal_pos ~ normal(0,1);
   theta_int_global_neg   ~ normal(0,1);
   theta_int_global_pos   ~ normal(0,1);
-  
-  // define priors on individual participant deviations from group parameter values
-  to_vector(pars_pr_neg) ~ normal(0,1);
-  to_vector(pars_pr_pos) ~ normal(0,1);
 
   // loop over observations
   for ( p in 1:nPpts ) {

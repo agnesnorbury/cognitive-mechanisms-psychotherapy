@@ -44,6 +44,9 @@ transformed parameters {
   matrix[nPpts,nTimes] effSens;
 
   // construct individual offsets (for non-centered parameterization)
+  // (to get the covariance Cholesky factor from the correlation Cholesky factor, 
+  // we need to multiply it by a diagonal matrix constructed from the variances 
+  // of the individual variates).
   rewSens_tilde = diag_pre_multiply(sigma_rewSens, R_chol_rewSens) * rewSens_raw;
   effSens_tilde = diag_pre_multiply(sigma_effSens, R_chol_effSens) * effSens_raw;
   
@@ -79,6 +82,10 @@ model {
   // define priors on individual participant deviations from group parameter values
   to_vector(rewSens_raw) ~ normal(0,1);
   to_vector(effSens_raw) ~ normal(0,1); 
+  
+  // intervention effects
+  rewSens_int ~ normal(0,1);
+  effSens_int ~ normal(0,1);
   
   // loop over observations
   for (p in 1:nPpts) {
@@ -140,7 +147,7 @@ generated quantities {
     // unvectorised likelihood as can't get to work otherwise
     for ( t in 1:nTrials_max ) {
      log_lik_t1[p,t] = bernoulli_logit_lpmf( choice01[p,1,t] | (v2_t1[t] - v1_t1[t]) );
-     log_lik_t2[p,t] = bernoulli_logit_lpmf(choice01[p,2,t] | (v2_t2[t] - v1_t2[t]) );
+     log_lik_t2[p,t] = bernoulli_logit_lpmf( choice01[p,2,t] | (v2_t2[t] - v1_t2[t]) );
     }
     
     // overall
