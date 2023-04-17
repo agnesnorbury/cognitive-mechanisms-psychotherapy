@@ -1,7 +1,6 @@
 # cognitive-mechanisms-psychotherapy
 
-Repository to hold code (and soon data) for the experiments and analyses described in the manuscript "Identifying cognitive mechanisms of psychotherapy
-for common mental health problems: a computational psychiatry approach".
+Repository to hold code (and soon data) for the experiments and analyses described in the manuscript [Different components of cognitive-behavioural therapy affect specific cognitive mechanisms](https://psyarxiv.com/ydct5).
 
 Play a demo version of the reward-effort decision-making task [here](https://modcomp-i1.web.app/) (no data will be collected).
 
