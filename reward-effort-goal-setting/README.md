@@ -1,6 +1,6 @@
 Simple reward-effort decision-making task built using [phaser3](https://phaser.io/phaser3).
 
-You can play a demo version [here](https://run.pavlovia.org/agnes.norbury/reward-effort-game-demo-2afc/) (no data will be saved).
+You can play a demo version [here](https://modcomp-i1.web.app/) (no data will be saved).
 
 The game world was compiled using [Tiled](https://www.mapeditor.org/) using art assets by [kenney](https://kenney.nl/).
 
