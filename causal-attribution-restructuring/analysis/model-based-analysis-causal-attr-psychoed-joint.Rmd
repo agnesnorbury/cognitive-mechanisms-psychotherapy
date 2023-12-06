@@ -16,7 +16,7 @@ knitr::opts_chunk$set(echo=FALSE, error=TRUE, warning=FALSE, message=FALSE, fig.
 # load packages
 packages <- c("rstan", "dplyr", "tidyr", "bayesplot", "loo", "hBayesDM", "tidybayes", "forcats",
               "ggpmisc", "patchwork", "devtools", "reshape2", "ggExtra", "unikn", "svglite",
-              "lme4", "glmnet", "ggcorrplot", "subscore")
+              "lme4", "glmnet", "ggcorrplot", "subscore", "boot")
 if (length(setdiff(packages, rownames(installed.packages()))) > 0 ) {
   install.packages(setdiff(packages, rownames(installed.packages())))
 }
@@ -26,13 +26,13 @@ lapply(packages, require, character.only=TRUE)
 setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
 
 # what task version to filter for
-task_ver <- "causal-attr-pe-1-2"
+task_ver <- "causal-attr1-2"      
 
-# create figures subdir
-subdir <- "figures"
-if (!file.exists(subdir)){
-  dir.create(file.path(dirname(rstudioapi::getActiveDocumentContext()$path), subdir))
-}
+# # create figures subdir
+# subdir <- "figures"
+# if (!file.exists(subdir)){
+#   dir.create(file.path(dirname(rstudioapi::getActiveDocumentContext()$path), subdir))
+# }
 ```
 
 ```{r setup_rstan}
@@ -44,9 +44,7 @@ nCores <- parallel::detectCores()    # get number of cores available for paralle
 # lets set some custom colour scales for our plots using unikn
 #seecol(pal_unikn_pair)
 palette2 <- usecol(pal_unikn_pair) 
-colours3 <- c(#"planning" = palette2[11],
-              #"control" = palette2[10],            # planning intervention control
-              "psychoeducation" = palette2[2],
+colours3 <- c("psychoeducation" = palette2[2],
               "control" = palette2[3]               # psychoeducation intervention control
               )
 # colours by model parameter type
@@ -59,15 +57,15 @@ colours2 <- c("group mean" = palette2[14],
 
 ```{r load_data}
 # load long format data
-data_long_1 <- read.csv(file=paste0("./", "causal-attr-pe-1", "-choice-task-data-long.csv")) %>%
-  dplyr::select(-X, -X.1) %>%
-  arrange(subID, taskNo, itemNo) %>%
+data_long_1 <- read.csv(file=paste0("./", "causal-attr1", "-choice-task-data-long-anon.csv")) %>%
+  dplyr::select(-X) %>%
+  arrange(uid, taskNo, itemNo) %>%
   mutate(sess = taskNo + 1)
 
 # load long format data
-data_long_2 <- read.csv(file=paste0("./", "causal-attr-pe-2", "-choice-task-data-long.csv")) %>%
+data_long_2 <- read.csv(file=paste0("./", "causal-attr2", "-choice-task-data-long-anon.csv")) %>%
   dplyr::select(-X) %>%
-  arrange(subID, taskNo, itemNo) %>%
+  arrange(uid, taskNo, itemNo) %>%
   mutate(sess = taskNo + 1)
 
 # concat
@@ -76,18 +74,16 @@ data_long_all <- rbind(data_long_1, data_long_2) %>%
   mutate(neg_pos = ifelse(valence=="negative", 0, 1))
 
 ## get number of time points etc
-nPpts <- length(unique(data_long_all$subID))
+nPpts <- length(unique(data_long_all$uid))
 nTimes <- max(data_long_all$sess)
 nTrials_all <- data_long_all %>%
-  arrange(subID) %>%
-  group_by(subID) %>%
+  arrange(uid) %>%
+  group_by(uid) %>%
   summarize(nTrials = n()) %>%
-  mutate(ID = seq(1, nPpts, 1))          # assign sequential numeric subIDs for ease / anonymity
+  mutate(ID = seq(1, nPpts, 1))          # assign sequential numeric uids for ease / anonymity
 
-data_long_all <- merge(data_long_all, nTrials_all, by="subID")
+data_long_all <- merge(data_long_all, nTrials_all, by="uid")
 
-# # save a copy
-# write.csv(data_long_all, file=paste0(task_ver, "-choice-task-data-long.csv"))
 
 nTrials_max <- nTrials_all %>%
   {max(.$nTrials)}
@@ -95,8 +91,8 @@ nTrials_max <- nTrials_all %>%
 # get lists of subjects IDs by condition for use with other data
 control_subs <- data_long_all %>%
   filter(condition=="control") %>%
-  dplyr::select(subID, ID)
-controls <- as.list(unique(control_subs$subID))
+  dplyr::select(uid, ID)
+controls <- as.list(unique(control_subs$uid))
 control_IDs <- as.list(unique(control_subs$ID))
 
 # get ordered list of intervention conditions
@@ -285,33 +281,71 @@ p
 
 # print numerical values for 90% CIs (quantile-based)
 params90cis <- summary(fit, pars = c("theta_int_internal_neg", "theta_int_internal_pos",
-                        "theta_int_global_neg", "theta_int_global_pos"), probs = c(0.05, 0.95))$summary
+                        "theta_int_global_neg", "theta_int_global_pos"), probs = c(0.1, 0.9))$summary
 print(params90cis)
+
+## new plotting
+## re-transform group means to output probabilities (cf raw theta estimates which control this)
+## and convert intervention effects to ~SMDs
+# theta_x_int_std =theta_x_int_sd / sqrt(sigma_theta[2])
+# first, get posterior (pooled) variance estimates for theta_x at time 2 (internal, global)
+params90cis <- summary(fit, pars = c("pars_sigma_neg[3]",
+                                     "pars_sigma_neg[4]", 
+                                     "pars_sigma_pos[3]",
+                                     "pars_sigma_pos[4]"), probs = c(0.1, 0.9))$summary
+sigma_theta_int_neg_t2 <- params90cis[1,1]
+sigma_theta_glob_neg_t2 <- params90cis[2,1]
+sigma_theta_int_pos_t2 <- params90cis[3,1]
+sigma_theta_glob_pos_t2 <- params90cis[4,1]
+
+fit_tidy2 <- fit_tidy %>%
+  mutate(.value2 = case_when(.variable =="mu_internal_theta_neg[1]" ~ inv.logit(.value),
+                             .variable =="mu_internal_theta_neg[2]" ~ inv.logit(.value),
+                             .variable =="mu_internal_theta_pos[1]" ~ inv.logit(.value),
+                             .variable =="mu_internal_theta_pos[2]" ~ inv.logit(.value),
+                             .variable =="mu_global_theta_neg[1]" ~ inv.logit(.value),
+                             .variable =="mu_global_theta_neg[2]" ~ inv.logit(.value),
+                             .variable =="mu_global_theta_pos[1]" ~ inv.logit(.value),
+                             .variable =="mu_global_theta_pos[2]" ~ inv.logit(.value),
+                             .variable =="theta_int_internal_neg" ~ .value/sqrt(sigma_theta_int_neg_t2),
+                             .variable =="theta_int_internal_pos" ~ .value/sqrt(sigma_theta_int_pos_t2),
+                             .variable =="theta_int_global_neg"   ~ .value/sqrt(sigma_theta_glob_neg_t2),
+                             .variable =="theta_int_global_pos"   ~ .value/sqrt(sigma_theta_glob_pos_t2),
+                             TRUE ~ .value))
+p2 <- fit_tidy2 %>%
+  ggplot(aes(y = fct_rev(.variable), x = .value2, fill = var_type)) +
+  stat_gradientinterval(.width = c(.9, .5),  slab_size = 1) +
+  scale_fill_manual(values = colours2) +
+  geom_vline(xintercept = 0, colour = "grey") + theme_minimal() +
+  theme(legend.position = "none") + theme(aspect.ratio=4/3) + labs(x="", y="")
+p2
+# ggsave(filename = paste0("./figures/", task_ver, "-means-ints-CIs-gradient-transf-smd.svg"),
+#        plot = last_plot(), device = "svg", dpi = 300)
 ```
 
 
 ```{r sx_corr_merge}
 # load sx data for rew-eff participants
-data_quest_wide_2 <- read.csv(file=paste0("causal-attr-pe2", "-self-report-data.csv")) %>%
+data_quest_wide_1 <- read.csv(file=paste0("causal-attr1", "-self-report-data-anon.csv")) %>%
   dplyr::select(-X, -catch_1, -catchQsCorrect)
 
 # load sx data for rew-eff participants
-data_quest_wide_3 <- read.csv(file=paste0("causal-attr-pe3", "-self-report-data.csv")) %>%
+data_quest_wide_2 <- read.csv(file=paste0("causal-attr2", "-self-report-data-anon.csv")) %>%
   dplyr::select(-X)
 
 # concat
-data_quest_wide_all <- rbind(data_quest_wide_2, data_quest_wide_3) %>%
-  arrange(subID)
+data_quest_wide_all <- rbind(data_quest_wide_1, data_quest_wide_2) %>%
+  arrange(uid)
 
 # get key linking numeric sequential IDs in model outtput back to original prolific identifiers
 ID_trans <- data_long_all %>%
-  dplyr::select(subID, ID) %>%
+  dplyr::select(uid, ID) %>%
   distinct()
 
 # merge sx into posts data
-posts_subIDs <- merge(posts, ID_trans, by="ID")
-posts_sx <- merge(posts_subIDs, data_quest_wide_all, by = "subID") %>%
-  arrange(subID)
+posts_uids <- merge(posts, ID_trans, by="ID")
+posts_sx <- merge(posts_uids, data_quest_wide_all, by = "uid") %>%
+  arrange(uid)
 ```
 
 
@@ -356,8 +390,8 @@ p4
 # individual responses are summarized by a standard deviation (SD_IR) given by the square root of the difference between the squares of the standard deviations of the change scores in the experimental (SD_Exp) and control (SD_Con) groups: SD_IR = √(SD_Exp^2 − SD_Con^2)
 hte <- posts_sx %>%
   filter(parameter=="p_internal" & item_valence=="neg") %>%
-  group_by(subID) %>%
-  mutate(psychoed = ifelse(subID %in% controls, 0, 1),
+  group_by(uid) %>%
+  mutate(psychoed = ifelse(uid %in% controls, 0, 1),
          deltaPneg = mean[session==2] - mean[session==1]) %>%
   filter(session==1) %>%
   ungroup() %>%
@@ -388,8 +422,8 @@ print(paste0("95% CI for variance in individual responses in mean internal theta
 
 hte <- posts_sx %>%
   filter(parameter=="p_internal" & item_valence=="pos") %>%
-  group_by(subID) %>%
-  mutate(psychoed = ifelse(subID %in% controls, 0, 1),
+  group_by(uid) %>%
+  mutate(psychoed = ifelse(uid %in% controls, 0, 1),
          deltaPpos = mean[session==2] - mean[session==1]) %>%
   filter(session==1) %>%
   ungroup() %>%
@@ -423,8 +457,8 @@ print(paste0("95% CI for variance in individual responses in mean internal theta
 # individual responses are summarized by a standard deviation (SD_IR) given by the square root of the difference between the squares of the standard deviations of the change scores in the experimental (SD_Exp) and control (SD_Con) groups: SD_IR = √(SD_Exp^2 − SD_Con^2)
 hte <- posts_sx %>%
   filter(parameter=="p_global" & item_valence=="neg") %>%
-  group_by(subID) %>%
-  mutate(psychoed = ifelse(subID %in% controls, 0, 1),
+  group_by(uid) %>%
+  mutate(psychoed = ifelse(uid %in% controls, 0, 1),
          deltaPneg = mean[session==2] - mean[session==1]) %>%
   filter(session==1) %>%
   ungroup() %>%
@@ -455,8 +489,8 @@ print(paste0("95% CI for variance in individual responses in mean global theta_n
 
 hte <- posts_sx %>%
   filter(parameter=="p_global" & item_valence=="pos") %>%
-  group_by(subID) %>%
-  mutate(psychoed = ifelse(subID %in% controls, 0, 1),
+  group_by(uid) %>%
+  mutate(psychoed = ifelse(uid %in% controls, 0, 1),
          deltaPpos = mean[session==2] - mean[session==1]) %>%
   filter(session==1) %>%
   ungroup() %>%
@@ -488,16 +522,16 @@ print(paste0("95% CI for variance in individual responses in mean global theta_p
 ```{r sx_grm_2}
 # # analysis of symptom data to create 'latent' symptom scores, using a form of IRT called a Graded Response Model
 # # first, grab the data we want to model
-nPpts_sx <- length(unique(data_quest_wide_all$subID))
+nPpts_sx <- length(unique(data_quest_wide_all$uid))
 
 sx_grm <- data_quest_wide_all %>%
-  arrange(subID) %>%
-  dplyr::select(PHQ9_2, PHQ9_6, DAS_1, DAS_2, DAS_3, DAS_4, DAS_5, DAS_6, DAS_8, DAS_9, subID) %>% 
-  arrange(subID) %>%
+  arrange(uid) %>%
+  dplyr::select(PHQ9_2, PHQ9_6, DAS_1, DAS_2, DAS_3, DAS_4, DAS_5, DAS_6, DAS_8, DAS_9, uid) %>% 
+  arrange(uid) %>%
   mutate(IDsx = seq(1, nPpts_sx, 1)) %>%
   mutate(across(contains("DAS"),
                ~recode(., `0`=4,`1`=3,`2`=2,`3`=1))) %>% # all items are reverse scored
-  melt(id.vars=c("IDsx", "subID")) %>%
+  melt(id.vars=c("IDsx", "uid")) %>%
   arrange(IDsx, variable) %>%
   mutate(value = as.numeric(value),
          variable2 = unclass(variable))
@@ -551,9 +585,9 @@ hist(params$kappa, main="", xlab="overall item difficulty",
 # plot contribution of each item to scores
 var_dict <- data_quest_wide_all %>%
   dplyr::select(PHQ9_2, PHQ9_6, DAS_1, DAS_2, DAS_3, DAS_4, DAS_5, DAS_6, DAS_8, DAS_9, # negcog items
-                subID) %>%
+                uid) %>%
   mutate(ID = seq(1, nPpts, 1)) %>%
-  melt(id.vars=c("ID", "subID")) %>%
+  melt(id.vars=c("ID", "uid")) %>%
   arrange(ID, variable) %>%
   mutate(variable2 = unclass(variable)) %>%
   dplyr::select(variable, variable2) %>%
@@ -587,8 +621,8 @@ posts_grm <- as.data.frame(summary(fit_grm, pars = c("theta"))$summary) %>%
            remove=TRUE, extra="drop")
 
 # merge sx into posts data
-posts_grm_subIDs <- merge(posts_grm, ID_trans, by="ID")
-posts_sx_grm <- merge(posts_grm_subIDs, data_quest_wide_all, by = "subID")
+posts_grm_uids <- merge(posts_grm, ID_trans, by="ID")
+posts_sx_grm <- merge(posts_grm_uids, data_quest_wide_all, by = "uid")
 
 # plot relationships between grm posterior means and sx scores
 p1 <- posts_sx_grm %>%
@@ -623,7 +657,7 @@ p3 <- posts_sx_grm %>%
 
 ```{r pre_data_joint}
 # check we have behaviour and sx data from the same subjects
-grep(FALSE, unique(data_quest_wide_all$subID)==unique(data_long_all$subID))
+grep(FALSE, unique(data_quest_wide_all$uid)==unique(data_long_all$uid))
 
 ## create arrays of choice options and responses for each participant and time point
 internalChosen_neg <- internalChosen_pos <- globalChosen_neg <- globalChosen_pos <- array(0, dim = c(nPpts, nTimes, nTrials_max/2))
@@ -726,6 +760,36 @@ ggsave(filename = paste0("./figures/", task_ver, "-", model,
 params90cis <- summary(fit, pars = c("theta_int_internal_neg", "theta_int_internal_pos",
                         "theta_int_global_neg", "theta_int_global_pos", "b1",
                         "beta_int"
-                        ), probs = c(0.05, 0.95))$summary
+                        ), probs = c(0.1, 0.9))$summary
 print(params90cis)
+
+## new plotting
+## convert to ~standardized betas
+# beta_b1_std =  sqrt(sigma_thetas[1]) / sqrt(pars_sigma_pos[1]) * beta_b1
+# beta_int1_std = sqrt(sigma_thetas[1]) / sqrt(pars_sigma_pos[3]) * beta_int1
+# first, get posterior (pooled) variance estimates for theta_internal_pos at each time point
+params90cis <- summary(fit, pars = c("pars_sigma_pos[1]",
+                                     "pars_sigma_pos[3]"), 
+                       probs = c(0.1, 0.9))$summary
+sigma_theta_int_pos_t1 <- params90cis[1,1]
+sigma_theta_int_pos_t2 <- params90cis[2,1]
+# for thetas, which are non hierarchically estimates, we will have to take the SD across posterior mean estimates
+tmp  <- summary(fit, pars = "theta", probs = c(0.1, 0.9))$summary
+sd_thetaN <- sd(tmp[,1])
+
+fit_tidy2 <- fit_tidy %>%
+  mutate(.value2 = case_when(.variable =="b1" ~ sd_thetaN/sqrt(sigma_theta_int_pos_t1) *.value,
+                             .variable =="beta_int" ~ sd_thetaN/sqrt(sigma_theta_int_pos_t2) *.value,
+                             TRUE ~ .value))
+p2 <- fit_tidy2 %>%
+  ggplot(aes(y = fct_rev(.variable), x = .value2, fill = var_type)) +
+  stat_gradientinterval(.width = c(.9, .5),  slab_size = 1) +
+  scale_fill_manual(values = colours2) +
+  geom_vline(xintercept = 0, colour = "grey") + theme_minimal() + xlim(-1,1) +
+  theme(legend.position = "none") + theme(aspect.ratio=2/7) + labs(x="", y="") +
+  theme(text = element_text(size = 20))
+p2
+# ggsave(filename = paste0("./figures/", task_ver, "-", model,
+#                          "-joint-CIs-baseline-gradient-transf.svg"),
+#        plot = last_plot(), device = "svg", dpi = 300)
 ```

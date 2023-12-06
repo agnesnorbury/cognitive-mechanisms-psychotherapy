@@ -80,8 +80,6 @@ parameters {
   ///////////////////self-report GRM parameters//////////////////////////
   // participant-level latent trait parameters
   real theta[nPpts];
-  // vector[nPpts] theta_raw;                 // latent trait score (e.g., ability)
-  // real mu_theta;                           // group-level mean
     
   // item-level difficulty parameters
   vector[nItems] mu;                       // first diffulty for each item
@@ -111,18 +109,16 @@ transformed parameters {
   // compute individual-level parameters from non-centered parameterization
   for ( p in 1:nPpts ) {
     // time 1
-    rewSens[p,1] = Phi_approx(mu_rewSens[1] + rewSens_tilde[1,p] + theta[p])*3;
-    effSens[p,1] = Phi_approx(mu_effSens[1] + effSens_tilde[1,p] + beta_base1*theta[p])*10;
+    rewSens[p,1] = -1 + Phi_approx(mu_rewSens[1] + rewSens_tilde[1,p] + theta[p])*4;
+    effSens[p,1] = -1 + Phi_approx(mu_effSens[1] + effSens_tilde[1,p] + beta_base1*theta[p])*10;
     // time 2
     if ( condition[p] == 1) {
-      rewSens[p,2] = Phi_approx(mu_rewSens[2] + rewSens_tilde[2,p] + rewSens_int)*3;
-      effSens[p,2] = Phi_approx(mu_effSens[2] + effSens_tilde[2,p] + effSens_int + beta_int*theta[p])*10;  //+ beta_bint*effSens[p,1]
+      rewSens[p,2] = -1 + Phi_approx(mu_rewSens[2] + rewSens_tilde[2,p] + rewSens_int)*4;
+      effSens[p,2] = -1 + Phi_approx(mu_effSens[2] + effSens_tilde[2,p] + effSens_int + beta_int*theta[p])*10;
     } else {
-      rewSens[p,2] = Phi_approx(mu_rewSens[2] + rewSens_tilde[2,p])*3;
-      effSens[p,2] = Phi_approx(mu_effSens[2] + effSens_tilde[2,p])*10;
+      rewSens[p,2] = -1 + Phi_approx(mu_rewSens[2] + rewSens_tilde[2,p])*4;
+      effSens[p,2] = -1 + Phi_approx(mu_effSens[2] + effSens_tilde[2,p])*10;
     }
-    // // theta values
-    // theta[p] = (mu_theta + theta_tilde[p]);
   }
   
   ///////////////////self-report GRM parameters//////////////////////////
@@ -160,12 +156,10 @@ model {
   
   // group-level beta weight on moderators of intervention effecs
   beta_base1 ~ normal(0,1);
-  //beta_base2 ~ normal(0,1);
   beta_int  ~ normal(0,1);
 
   // priors on GRM latent factors
   theta ~ normal(0,1);              // individual values
-  //mu_theta ~ normal(0,1);         // group level mean
   
   // priors on GRM disciminability of each item
   alpha ~ lognormal(1, 1);

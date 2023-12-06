@@ -127,10 +127,7 @@ var respOptsPHQ9Difficulty = ["Not difficult at all", "Somewhat difficult", "Ver
 // PHQ9 scale items
 var PHQ9 = {
   type: jsPsychSurveyLikert,
-  preamble: ("Over the <b>last two weeks</b>, how often have you been bothered by any of the following problems?\n "//+
-             // "(<i>Although you have already answered some questions like this during the study, we "+
-             // "would now like you to think about the <u>last two weeks overall</u>, rather than how you feel right now.</i>)"
-             ),
+  preamble: ("Over the <b>last two weeks</b>, how often have you been bothered by any of the following problems?\n "),
   questions: [
     {prompt: "<b>Little interest or pleasure in doing things</b>", 
       name: "PHQ9_1", labels: respOptsPHQ9, required:true, horizontal: true}, 
@@ -168,10 +165,7 @@ var PHQ9 = {
 // PHQ2 scale items 
 var PHQ2 = {
   type: jsPsychSurveyLikert,
-  preamble: ("Over the <b>last two weeks</b>, how often have you been bothered by any of the following problems?\n "
-             // "(<i>Although you have already answered some questions like this during the study, we "+
-             // "would now like you to think about the <u>last two weeks overall</u>, rather than how you feel right now.</i>)"
-             ),
+  preamble: ("Over the <b>last two weeks</b>, how often have you been bothered by any of the following problems?\n "),
   questions: [
     {prompt: "<b>Little interest or pleasure in doing things</b>", 
       name: "PHQ9_1", labels: respOptsPHQ9, required:true, horizontal: true}, 
@@ -189,55 +183,6 @@ var PHQ2 = {
     saveQuestData("PHQ2", respData, respRT);
   }
 };
-
-// PHQ state scale
-var PHQstateIntro = {
-    type: jsPsychHtmlButtonResponse,
-    choices: ['continue'],
-    is_html: true,
-    stimulus: (`Before you move on, we'd like to ask you
-                some questions about <b>how how you feel at the moment</b>.
-                <br><br><br>`)
-};
-var respOptsPHQstate = ["not at all", "a bit", "some", "a lot"];
-var PHQstateNo = 0;
-var PHQstate = {
-  type: jsPsychSurveyLikert,
-  preamble: ("<p>"+
-             "<b>RIGHT NOW</b>, how much are you..."+
-             "</p>"
-             // "(<i>Although you have already answered some questions like this during the study, we "+
-             // "would now like you to think about the <u>last two weeks overall</u>, rather than how you feel right now.</i>)"
-             ),
-  questions: [
-    {prompt: "<b>feeling little interest or pleasure in doing things?</b>", 
-      name: "PHQstate_1", labels: respOptsPHQstate, required:true, horizontal: true}, 
-    {prompt: "<b>feeling down, depressed, or hopeless?</b>", 
-      name: "PHQstate_2", labels: respOptsPHQstate, required: true, horizontal: true},
-    {prompt: "<b>feeling tired or having little energy?</b>", 
-      name: "PHQstate_3", labels: respOptsPHQstate, required:true, horizontal: true}, 
-    {prompt: "<b>feeling bad about yourself?</b>", 
-      name: "PHQstate_4", labels: respOptsPHQstate, required: true, horizontal: true},
-    {prompt: "<b>having trouble concentrating on things?</b>", 
-      name: "PHQstate_5", labels: respOptsPHQstate, required:true, horizontal: true}, 
-    {prompt: "<b>feeling like you are slowed down?</b>", 
-      name: "PHQstate_6", labels: respOptsPHQstate, required: true, horizontal: true},
-    {prompt: "<b>feeling more fidgety or restless than usual?</b>", 
-      name: "PHQstate_7", labels: respOptsPHQstate, required:true, horizontal: true}
-  ],
-  button_label: 'continue',
-  scale_width: scaleDisplayWidth,  
-  on_finish: function(){
-    // // set progress bar manually
-    // this.type.jsPsych.setProgressBar(0.6);
-    // get response and RT data 
-    var respData = this.type.jsPsych.data.getLastTrialData().trials[0].response;
-    var respRT = this.type.jsPsych.data.getLastTrialData().trials[0].rt;
-    saveQuestData("PHQstate_"+PHQstateNo, respData, respRT);
-    PHQstateNo++;
-  }
-};
-
 
 ////////////////////MINI-SPIN//////////////////////////////
 // define response labels
@@ -408,9 +353,6 @@ timeline_quests.push(DAS);
 timeline_quests.push(demogs);
 timeline_quests.push(questsEndScreen);
 
-var timeline_PHQstate = []; 
-timeline_PHQstate.push(PHQstateIntro);     
-timeline_PHQstate.push(PHQstate);
 
-export { timeline_quests, timeline_PHQstate };
+export { timeline_quests };
 

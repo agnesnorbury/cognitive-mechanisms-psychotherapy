@@ -53,15 +53,15 @@ transformed parameters {
   // compute individual-level parameters from non-centered parameterization
   for ( p in 1:nPpts ) {
     // time 1
-    rewSens[p,1] = Phi_approx(mu_rewSens[1] + rewSens_tilde[1,p])*3;
-    effSens[p,1] = Phi_approx(mu_effSens[1] + effSens_tilde[1,p])*10;
+    rewSens[p,1] = -1 + Phi_approx(mu_rewSens[1] + rewSens_tilde[1,p])*4;
+    effSens[p,1] = -1 + Phi_approx(mu_effSens[1] + effSens_tilde[1,p])*10;
     // time 2
     if ( condition[p] == 1) {
-      rewSens[p,2] = Phi_approx(mu_rewSens[2] + rewSens_tilde[2,p] + rewSens_int)*3;
-      effSens[p,2] = Phi_approx(mu_effSens[2] + effSens_tilde[2,p] + effSens_int)*10;
+      rewSens[p,2] = -1 + Phi_approx(mu_rewSens[2] + rewSens_tilde[2,p] + rewSens_int)*4;
+      effSens[p,2] = -1 + Phi_approx(mu_effSens[2] + effSens_tilde[2,p] + effSens_int)*10;
     } else {
-      rewSens[p,2] = Phi_approx(mu_rewSens[2] + rewSens_tilde[2,p])*3;
-      effSens[p,2] = Phi_approx(mu_effSens[2] + effSens_tilde[2,p])*10;
+      rewSens[p,2] = -1 + Phi_approx(mu_rewSens[2] + rewSens_tilde[2,p])*4;
+      effSens[p,2] = -1 + Phi_approx(mu_effSens[2] + effSens_tilde[2,p])*10;
     }
   }
 }

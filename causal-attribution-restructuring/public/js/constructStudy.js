@@ -4,10 +4,10 @@ import { allowDevices } from "./versionInfo.js";
 // import study elements
 import { timeline_instructions_choice } from "./instructionsChoice.js";
 import { timeline_choice_1, timeline_choice_2 } from "./taskChoice.js";
-import { timeline_instructions_learning } from "./instructionsLearning.js";    
-import { timeline_learning } from "./taskLearning.js";
+// import { timeline_instructions_learning } from "./instructionsLearning.js";    
+// import { timeline_learning } from "./taskLearning.js";
 import { timeline_intervention } from "./intervention.js";
-import { timeline_PHQstate, timeline_quests } from "./selfReports.js";
+import { timeline_quests } from "./selfReports.js";
 
 //////////////////////////////////////initialise jsPsych///////////////////////////////////
 var jsPsych = initJsPsych({
@@ -28,16 +28,14 @@ export function runStudy(){
     // construct the study timeline...
     // 1. initial instructions, choice test 1, PHQstate 1 
     timeline = timeline.concat(timeline_instructions_choice);    
-    timeline = timeline.concat(timeline_choice_1);               
-    timeline = timeline.concat(timeline_PHQstate);               
-    // 2. learning test
-    timeline = timeline.concat(timeline_instructions_learning);  
-    timeline = timeline.concat(timeline_learning);                
+    timeline = timeline.concat(timeline_choice_1);                            
+    // // 2. learning test
+    // timeline = timeline.concat(timeline_instructions_learning);  
+    // timeline = timeline.concat(timeline_learning);                
     // 3. intervention (active or control)
     timeline = timeline.concat(timeline_intervention);           
     // 4. choice test 2, PHQstate 2 
-    timeline = timeline.concat(timeline_choice_2);                   
-    timeline = timeline.concat(timeline_PHQstate);               
+    timeline = timeline.concat(timeline_choice_2);                                
     // 5. self-reports, debrief and study end screens
     timeline = timeline.concat(timeline_quests);                    
     

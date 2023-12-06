@@ -16,7 +16,7 @@ knitr::opts_chunk$set(echo=FALSE, error=TRUE, warning=FALSE, message=FALSE, fig.
 # load packages
 packages <- c("rstan", "dplyr", "tidyr", "bayesplot", "loo", "hBayesDM", "tidybayes", "forcats",
               "ggpmisc", "patchwork", "devtools", "reshape2", "ggExtra", "unikn", "svglite",
-              "lme4", "glmnet", "ggcorrplot", "subscore")
+              "lme4", "glmnet", "ggcorrplot", "subscore", "boot")
 if (length(setdiff(packages, rownames(installed.packages()))) > 0 ) {
   install.packages(setdiff(packages, rownames(installed.packages())))
 }
@@ -24,14 +24,16 @@ lapply(packages, require, character.only=TRUE)
 
 # set wd
 setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
-# what task version to filter for
-task_ver <- "causal-attr-pe-1"      #"causal-attr-pe-2"
 
-# create figures subdir
-subdir <- "figures"
-if (!file.exists(subdir)){
-  dir.create(file.path(dirname(rstudioapi::getActiveDocumentContext()$path), subdir))
-}
+# what task version to filter for
+task_ver <- "causal-attr1"         # for initial discovery sample data
+# task_ver <- "causal-attr2"       # for replication sample data
+
+# # create figures subdir
+# subdir <- "figures"
+# if (!file.exists(subdir)){
+#   dir.create(file.path(dirname(rstudioapi::getActiveDocumentContext()$path), subdir))
+# }
 ```
 
 ```{r setup_rstan}
@@ -44,9 +46,7 @@ nCores <- parallel::detectCores()    # get number of cores available for paralle
 #seecol(pal_unikn_pair)
 palette2 <- usecol(pal_unikn_pair)
 # colours by intervention group
-colours3 <- c(#"planning" = palette2[11],
-              #"control" = palette2[10],            # planning control
-              "psychoeducation" = palette2[2],
+colours3 <- c("psychoeducation" = palette2[2],
               "control" = palette2[3]               # psychoed control
               )
 # colours by model parameter type
@@ -58,24 +58,24 @@ colours2 <- c("group mean" = palette2[14],
 
 ```{r load_data}
 # load long format data
-data_long_all <- read.csv(file=paste0("./", task_ver, "-choice-task-data-long.csv")) %>%
+data_long_all <- read.csv(file=paste0("./", task_ver, "-choice-task-data-long-anon.csv")) %>%
   dplyr::select(-X) %>%
-  arrange(subID, taskNo, itemNo) %>%
+  arrange(uid, taskNo, itemNo) %>%
   mutate(sess = taskNo + 1)
 
 ## get number of time points etc
-nPpts <- length(unique(data_long_all$subID))
+nPpts <- length(unique(data_long_all$uid))
 nTimes <- max(data_long_all$sess)
-subIDs <- data_long_all %>%
-  group_by(subID) %>%
+uids <- data_long_all %>%
+  group_by(uid) %>%
   summarize() %>%
   mutate(ID=seq(1, nPpts, 1))   # add sequential numeric IDs for compatibility with rstan output    
-data_long_all <- merge(data_long_all, subIDs, by="subID") %>%
+data_long_all <- merge(data_long_all, uids, by="uid") %>%
   mutate(neg_pos=ifelse(valence=="positive",1,0)) %>%
   rename("ID" = ID.y)
 
 nTrials_all <- data_long_all %>%
-  group_by(subID, sess) %>%
+  group_by(uid, sess) %>%
   summarize(nTrials = n())
 nTrials_max <- nTrials_all %>%
   {max(.$nTrials)}
@@ -83,8 +83,8 @@ nTrials_max <- nTrials_all %>%
 # get lists of subjects IDs by condition for use with other data
 control_subs <- data_long_all %>%
   filter(condition=="control") %>%
-  dplyr::select(subID, ID)
-controls <- as.list(unique(control_subs$subID))
+  dplyr::select(uid, ID)
+controls <- as.list(unique(control_subs$uid))
 control_IDs <- as.list(unique(control_subs$ID))
 
 # get ordered list of intervention conditions
@@ -276,8 +276,46 @@ params90cis <- summary(fit, pars = c("mu_internal_theta_neg[1]", "mu_internal_th
            "mu_global_theta_neg[1]",   "mu_global_theta_neg[2]",
            "mu_global_theta_pos[1]",   "mu_global_theta_pos[2]",
            "theta_int_internal_neg", "theta_int_internal_pos",
-           "theta_int_global_neg", "theta_int_global_pos"), probs = c(0.05, 0.95))$summary
+           "theta_int_global_neg", "theta_int_global_pos"), probs = c(0.1, 0.9))$summary
 print(params90cis)
+
+## new plotting
+## re-transform group means to output probabilities (cf raw theta estimates which control this)
+## and convert intervention effects to ~SMDs
+# theta_x_int_std =theta_x_int_sd / sqrt(sigma_theta[2])
+# first, get posterior (pooled) variance estimates for theta_x at time 2 (internal, global)
+params90cis <- summary(fit, pars = c("pars_sigma_neg[3]",
+                                     "pars_sigma_neg[4]", 
+                                     "pars_sigma_pos[3]",
+                                     "pars_sigma_pos[4]"), probs = c(0.1, 0.9))$summary
+sigma_theta_int_neg_t2 <- params90cis[1,1]
+sigma_theta_glob_neg_t2 <- params90cis[2,1]
+sigma_theta_int_pos_t2 <- params90cis[3,1]
+sigma_theta_glob_pos_t2 <- params90cis[4,1]
+
+fit_tidy2 <- fit_tidy %>%
+  mutate(.value2 = case_when(.variable =="mu_internal_theta_neg[1]" ~ inv.logit(.value),
+                             .variable =="mu_internal_theta_neg[2]" ~ inv.logit(.value),
+                             .variable =="mu_internal_theta_pos[1]" ~ inv.logit(.value),
+                             .variable =="mu_internal_theta_pos[2]" ~ inv.logit(.value),
+                             .variable =="mu_global_theta_neg[1]" ~ inv.logit(.value),
+                             .variable =="mu_global_theta_neg[2]" ~ inv.logit(.value),
+                             .variable =="mu_global_theta_pos[1]" ~ inv.logit(.value),
+                             .variable =="mu_global_theta_pos[2]" ~ inv.logit(.value),
+                             .variable =="theta_int_internal_neg" ~ .value/sqrt(sigma_theta_int_neg_t2),
+                             .variable =="theta_int_internal_pos" ~ .value/sqrt(sigma_theta_int_pos_t2),
+                             .variable =="theta_int_global_neg"   ~ .value/sqrt(sigma_theta_glob_neg_t2),
+                             .variable =="theta_int_global_pos"   ~ .value/sqrt(sigma_theta_glob_pos_t2),
+                             TRUE ~ .value))
+p2 <- fit_tidy2 %>%
+  ggplot(aes(y = fct_rev(.variable), x = .value2, fill = var_type)) +
+  stat_gradientinterval(.width = c(.9, .5),  slab_size = 1) +
+  scale_fill_manual(values = colours2) +
+  geom_vline(xintercept = 0, colour = "grey") + theme_minimal() +
+  theme(legend.position = "none") + theme(aspect.ratio=4/3) + labs(x="", y="")
+p2
+# ggsave(filename = paste0("./figures/", task_ver, "-means-ints-CIs-gradient-transf-smd.svg"),
+#        plot = last_plot(), device = "svg", dpi = 300)
 ```
 
 ```{r pred_acc_int}
@@ -291,16 +329,16 @@ y_rep <- as.data.frame(summary(fit, pars = c("internal_neg_rep"))$summary) %>%
   dplyr::select(`50%`) %>%
   add_rownames(var = "var") %>%
   separate(var, sep="\\[", into=c("variable","tmp"), remove=TRUE, extra="drop") %>%
-  separate(tmp, sep=",", into=c("subID","sess","trial"), remove=TRUE, extra="drop") %>%
+  separate(tmp, sep=",", into=c("uid","sess","trial"), remove=TRUE, extra="drop") %>%
   separate(trial, sep=-1, into="trial", extra="drop") %>%
-  mutate(subID=as.numeric(subID)) %>%
-  arrange(subID) %>%
+  mutate(uid=as.numeric(uid)) %>%
+  arrange(uid) %>%
   rename(mean_predicted = `50%`)
 
 # predictive accuracy (per sub)
 y_rep <- cbind(y_rep, observed=y)
 accs <- y_rep %>%
-  group_by(subID) %>%
+  group_by(uid) %>%
   mutate(acc = (mean_predicted==observed)) %>%
   summarise(mean_acc = mean(acc))
 

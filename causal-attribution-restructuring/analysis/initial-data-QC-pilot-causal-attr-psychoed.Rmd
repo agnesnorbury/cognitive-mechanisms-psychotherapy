@@ -1,5 +1,5 @@
 ---
-title: 'modComp study causal attribution task: psychoeducation intervention pilot data '
+title: 'modComp study causal attribution task: cognitive restructuring intervention data '
 date:  "`r format(Sys.time(), '%d %B, %Y')`"
 output:
   html_document:
@@ -29,19 +29,21 @@ source_url("https://raw.githubusercontent.com/RainCloudPlots/RainCloudPlots/mast
 # set wd
 setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
 
-# create figures subdir
-subdir <- "figures"
-if (!file.exists(subdir)){
-  dir.create(file.path(dirname(rstudioapi::getActiveDocumentContext()$path), subdir))
-}
+# # create figures subdir
+# subdir <- "figures"
+# if (!file.exists(subdir)){
+#   dir.create(file.path(dirname(rstudioapi::getActiveDocumentContext()$path), subdir))
+# }
 ```
 
 ```{r specify_task}
 ## set-up where to look for data, and what task version to get
 # where firebase raw output files have been downloaded to
 data_dir <- "../data"
+
 # what task version to filter for
-task_ver <- "causal-attr-pe-1"         #"causal-attr-pe-2"
+task_ver <- "causal-attr1"         # for initial discovery sample data
+# task_ver <- "causal-attr2"       # for replication sample data
 ```
 
 ```{r setup_colour_scales}
@@ -49,9 +51,7 @@ task_ver <- "causal-attr-pe-1"         #"causal-attr-pe-2"
 #seecol(pal_unikn_pair)
 palette2 <- usecol(pal_unikn_pair)
 # colours by intervention group
-colours3 <- c(#"planning" = palette2[11],
-              #"control" = palette2[10],             # planning control
-              "psychoeducation" = palette2[2],
+colours3 <- c("psychoeducation" = palette2[2],
               "control" = palette2[3]                # psychoed control
               )
 # colours by model parameter type
@@ -60,6 +60,8 @@ colours2 <- c("group mean" = palette2[14],
               "baseline effect" = palette2[4]
               )
 ```
+
+The below functions provided for transparency but not needed here (since the raw data has already been reformatted from json and concatenated into a csv file)
 
 ```{r setup_data_proc_functions}
 # function to read all task data files in input list from json to nice df
@@ -162,63 +164,6 @@ read_int_json <- function(file) {
   data_df <- as.data.frame(data_tib) %>%
     mutate(subID = data_f$prolificSubID)
 }
-
-# function to read all files in input list from json to nice df
-read_phqs_json <- function(file) {
-  # read file from json into an R list:
-  data_f <- rjson::fromJSON(file = file, simplify = TRUE)
-  # select only phqstate data
-  data_f_p <- data_f[grepl("PHQstate", names(data_f))]
-  data_f_p <- data_f_p[!grepl("RT", names(data_f_p))]
-  
-  # convert to tibble to easily un-nesting of list data
-  data_tib <- tibble(data_f_p) %>%
-    mutate(variable = names(data_f_p)) %>%
-    unnest_wider(data_f_p)
-  
-  # and finally convert to a df with all the other info we want:
-  data_df <- as.data.frame(data_tib) %>%
-    mutate(subID = data_f$prolificSubID)
-}
-
-# function to read all files in input list from json to nice df
-read_freetxt_json <- function(file) {
-  # read file from json into an R list:
-  data_f <- rjson::fromJSON(file = file, simplify = TRUE)
-  # select only trial data (numbered list items)
-  data_f_ft <- data_f[grepl("freeText", names(data_f))]
-  data_f_ft <- data_f_ft[!grepl("RT", names(data_f_ft))]
-  
-  # convert to tibble to easily un-nesting of list data
-  data_tib <- tibble(data_f_ft) %>%
-    mutate(variable = names(data_f_ft)) %>%
-    unnest_wider(data_f_ft)
-  
-  # and finally convert to a df with all the other info we want:
-  data_df <- as.data.frame(data_tib) %>%
-    mutate(subID = data_f$prolificSubID)
-}
-
-# function to read all files in input list from json to nice df
-read_ratings_json <- function(file) {
-  # read file from json into an R list:
-  data_f <- rjson::fromJSON(file = file, simplify = TRUE)
-  # select only trial data (numbered list items)
-  data_f_r <- data_f[grepl("ratings", names(data_f))]
-  data_f_ro <- data_f_r[!grepl("RT", names(data_f_r))]
-  data_f_rt <- data_f_r[grepl("RT", names(data_f_r))]
-  
-  # convert to tibble to easily un-nesting of list data
-  data_tib <- tibble(data_f_ro) %>%
-    mutate(variable = names(data_f_ro)) %>%
-    unnest_wider(data_f_ro) %>%
-    rename("ext_int"=`...1`,
-           "spec_glob"=`...2`)
-  
-  # and finally convert to a df with all the other info we want:
-  data_df <- as.data.frame(data_tib) %>%
-    mutate(subID = data_f$prolificSubID)
-}
 ```
 
 ```{r load_choice_data}
@@ -247,20 +192,20 @@ read_ratings_json <- function(file) {
 # data_long_choice <- merge(data_long_choice, nTrials_all, by="subID")
 
 # OR load pre-processed data 
-data_long_choice <- read.csv(file=paste0(task_ver, "-choice-task-data-long.csv"))
+data_long_choice <- read.csv(file=paste0(task_ver, "-choice-task-data-long-anon.csv"))
 nPpts <- length(unique(data_long_choice$subID))
 nTrials_max_choice <- 64
 
 # and get lists of subjects by condition for use with other data
 control_subs <- data_long_choice %>%
   filter(condition=="control") %>%
-  dplyr::select(subID)
-controls <- as.list(unique(control_subs$subID))
+  dplyr::select(uid)
+controls <- as.list(unique(control_subs$uid))
 
 active_subs <- data_long_choice %>%
   filter(condition=="psychoed") %>%
-   dplyr::select(subID)
-actives <- as.list(unique(active_subs$subID))
+   dplyr::select(uid)
+actives <- as.list(unique(active_subs$uid))
 ```
 
 Participants so far for task version `r task_ver` (*N*=`r nPpts`):
@@ -268,8 +213,8 @@ Participants so far for task version `r task_ver` (*N*=`r nPpts`):
 ```{r prolific_QC_bonus}
 # get basic quality control data and determine prolific bonuses
 QC_bonus_ch <- data_long_choice %>% 
-  arrange(subID, itemNo) %>% 
-  group_by(subID, taskNo) %>%
+  arrange(uid, itemNo) %>% 
+  group_by(uid, taskNo) %>%
   summarize(nTrials = n(),
             medianRT = round(median(rt, na.rm=T)/1000,1),
             prop1 = round(sum(response==1, na.rm=T)/(nTrials_max_choice), 2),
@@ -313,7 +258,7 @@ qc_p
 # 
 # # and merge into main file for future analysis
 # data_long_choice <- merge(data_long_choice, event_info, by=c("itemNo", "valence"), no.dups=TRUE) %>%
-#   arrange(subID, taskNo, trialNo)
+#   arrange(uid, taskNo, trialNo)
 # 
 ```
 
@@ -328,7 +273,7 @@ qc_p
 #            internalSpecificChosen = ifelse((grepl("internal_specific",chosen_attr_type)), 1, 0),
 #            externalGlobalChosen = ifelse((grepl("external_global",chosen_attr_type)), 1, 0),
 #            externalSpecificChosen = ifelse((grepl("external_specific",chosen_attr_type)), 1, 0)) %>%
-#   group_by(subID)
+#   group_by(uid)
 # # re-save for convenience
 # write.csv(data_long_choice, file=paste0(task_ver, "-choice-task-data-long.csv"))
 ```
@@ -341,17 +286,17 @@ At the group level, do we see evidence for self-serving bias? Is this affected b
 # plot by attribution choices and valence
 rp1 <- data_long_choice %>%
   mutate(condition = ifelse(condition=="psychoed", "psychoeducation", "control")) %>%
-  dplyr::select(subID, valence, taskNo, condition, internalChosen) %>%
-  melt(id.vars=c("subID", "valence", "taskNo", "condition")) %>%
+  dplyr::select(uid, valence, taskNo, condition, internalChosen) %>%
+  melt(id.vars=c("uid", "valence", "taskNo", "condition")) %>%
   mutate(taskNo = as.factor(taskNo)) %>%
-  group_by(subID, valence, taskNo, condition) %>%
+  group_by(uid, valence, taskNo, condition) %>%
   summarise(mean_internal = mean(value)) %>%
   ggplot(aes(x=taskNo, y=mean_internal, group=interaction(condition, taskNo), 
              colour=condition, fill=condition)) +
   geom_flat_violin(position=position_nudge(x = .1, y = 0),  
                    adjust = 1.5, trim = TRUE, alpha = .4, colour = NA) +
   geom_point(position=position_jitter(width=.02), size = 3, shape = 20) +
-  geom_line(aes(group=subID, colour=condition), alpha = .4) +
+  geom_line(aes(group=uid, colour=condition), alpha = .4) +
   geom_boxplot(outlier.shape = NA, alpha = .6, width = .3, colour = "black") +
   theme_minimal() + facet_wrap(~valence) +
   scale_colour_manual(values=colours3) + 
@@ -361,17 +306,17 @@ rp1 <- data_long_choice %>%
 
 rp2 <- data_long_choice %>%
   mutate(condition = ifelse(condition=="psychoed", "psychoeducation", "control")) %>%
-  dplyr::select(subID, valence, taskNo, condition, globalChosen) %>%
-  melt(id.vars=c("subID", "valence", "taskNo", "condition")) %>%
+  dplyr::select(uid, valence, taskNo, condition, globalChosen) %>%
+  melt(id.vars=c("uid", "valence", "taskNo", "condition")) %>%
   mutate(taskNo = as.factor(taskNo)) %>%
-  group_by(subID, valence, taskNo, condition) %>%
+  group_by(uid, valence, taskNo, condition) %>%
   summarise(mean_internal = mean(value)) %>%
   ggplot(aes(x=taskNo, y=mean_internal, group=interaction(condition, taskNo), 
              colour=condition, fill=condition)) +
   geom_flat_violin(position=position_nudge(x = .1, y = 0),  
                    adjust = 1.5, trim = TRUE, alpha = .4, colour = NA) +
   geom_point(position=position_jitter(width=.02), size = 3, shape = 20) +
-  geom_line(aes(group=subID, colour=condition), alpha = .4) +
+  geom_line(aes(group=uid, colour=condition), alpha = .4) +
   geom_boxplot(outlier.shape = NA, alpha = .6, width = .3, colour = "black") +
   theme_minimal() + facet_wrap(~valence) +
   scale_colour_manual(values=colours3) + 
@@ -384,26 +329,26 @@ rp2 <- data_long_choice %>%
 
 ```{r basic_stats}
 # linear mixed models
-lme1 <- lmer(internalChosen ~ valence * condition * taskNo +  ( 1 | subID ),
+lme1 <- lmer(internalChosen ~ valence * condition * taskNo +  ( 1 | uid ),
             data=data_long_choice)
 summary(lme1)
 anova(lme1)
-emmeans(lme1, list(pairwise ~ condition*valence*taskNo), adjust = "tukey", pbkrtest.limit = 6400)
+emmeans(lme1, list(pairwise ~ condition*valence*taskNo), adjust = "tukey") #, pbkrtest.limit = 6400
 
 
-lme1 <- lmer(globalChosen ~ valence * condition * taskNo +  ( 1 | subID ),
+lme1 <- lmer(globalChosen ~ valence * condition * taskNo +  ( 1 | uid ),
             data=data_long_choice)
 summary(lme1)
 anova(lme1)
-emmeans(lme1, list(pairwise ~ condition*valence*taskNo), adjust = "tukey", pbkrtest.limit = 6400)
+emmeans(lme1, list(pairwise ~ condition*valence*taskNo), adjust = "tukey") #, pbkrtest.limit = 6400
 ```
 
 ### Choice RT data
 
 ```{r choice_rt}
 p <- data_long_choice %>%
-  dplyr::select(subID, valence, trialNo, taskNo, condition, rt) %>%
-  group_by(subID, taskNo, valence) %>%
+  dplyr::select(uid, valence, trialNo, taskNo, condition, rt) %>%
+  group_by(uid, taskNo, valence) %>%
   mutate(trialNoByVal = 1:n()) %>%
   ggplot(aes(x=trialNoByVal, y=rt/6000, group=valence, colour=valence, fill=valence)) +
   stat_summary(fun=mean, geom="line") +
@@ -416,8 +361,8 @@ p <- data_long_choice %>%
 p
 
 p <- data_long_choice %>%
-  dplyr::select(subID, valence, trialNo, taskNo, condition, rt) %>%
-  group_by(subID, taskNo, valence) %>%
+  dplyr::select(uid, valence, trialNo, taskNo, condition, rt) %>%
+  group_by(uid, taskNo, valence) %>%
   mutate(trialNoByVal = 1:n()) %>%
   ggplot(aes(x=trialNoByVal, y=rt/6000, group=valence, colour=valence, fill=valence)) +
   stat_summary(fun=median, geom="line") +
@@ -430,7 +375,7 @@ p <- data_long_choice %>%
 p
 
 # linear mixed model
-lme1 <- lmer(rt ~ valence * condition * taskNo + (1 | subID:taskNo), data=data_long_choice)
+lme1 <- lmer(rt ~ valence * condition * taskNo + (1 | uid:taskNo), data=data_long_choice)
 summary(lme1)
 anova(lme1)
 ```
@@ -450,11 +395,11 @@ p1 <- QC_bonus_ch %>%
 p1
 
 data_aov <- QC_bonus_ch %>%
-  dplyr::select(subID, condition, intTime) %>%
-  group_by(subID, condition) %>%
+  dplyr::select(uid, condition, intTime) %>%
+  group_by(uid, condition) %>%
   summarise(mean_int_time = mean(intTime)) %>%
   ungroup
-res.aov <- anova_test(data = data_aov, dv = mean_int_time, wid = subID, between=condition)
+res.aov <- anova_test(data = data_aov, dv = mean_int_time, wid = uid, between=condition)
 get_anova_table(res.aov)
 ```
 
@@ -466,11 +411,11 @@ Who were our participants?
 # # apply preproc functions to get the data in a nice df format
 # data_quest_all <- lapply(quest_data_files, read_quest_json)   # returns nested list of processed data
 # data_quest_long <- do.call(rbind, data_quest_all)             # binds all list elements into one big df
-# data_quest_wide <- pivot_wider(data_quest_long, id_cols = subID, names_from = quest,
+# data_quest_wide <- pivot_wider(data_quest_long, id_cols = uid, names_from = quest,
 #                                values_from = answer) %>%
 #   dplyr::select(-P0_Q0, -study_feedback) %>%
-#   mutate(demogs_age = replace(demogs_age, subID=="5ed7a0239e6b4a23ec6eb236", 21),
-#          demogs_gender = replace(demogs_gender, subID=="5ed7a0239e6b4a23ec6eb236", "man")) %>%
+#   mutate(demogs_age = replace(demogs_age, uid=="5ed7a0239e6b4a23ec6eb236", 21),
+#          demogs_gender = replace(demogs_gender, uid=="5ed7a0239e6b4a23ec6eb236", "man")) %>%
 #   # fix list data identified using sapply(data_quest_wide, class) so can save as csv
 #   mutate(across(c(is.list, -contains("demogs"), -contains("catch_2"),
 #                   -contains("study_acceptability")),
@@ -483,7 +428,7 @@ Who were our participants?
 # write.csv(data_quest_wide, file=paste0(task_ver, "-self-report-data.csv"))
 
 # OR load data
-data_quest_wide <- read.csv(file=paste0(task_ver, "-self-report-data.csv")) %>%
+data_quest_wide <- read.csv(file=paste0(task_ver, "-self-report-data-anon.csv")) %>%
   dplyr::select(-X)
 ```
 
@@ -516,8 +461,8 @@ view(dfSummary(summ))
 
 ```{r plot_demogs}
 p1 <- data_quest_wide %>%
-  filter(!subID=="5ed7a0239e6b4a23ec6eb236") %>%
-  mutate(group = ifelse((subID %in% controls), "control", "psychoeducation")) %>%
+  filter(!uid=="subCA1_45") %>%  # rm one participant missing this data
+  mutate(group = ifelse((uid %in% controls), "control", "psychoeducation")) %>%
   ggplot(aes(x=demogs_age, fill=group, group=group)) +
   geom_histogram(alpha=.6, position = "identity") + #, binwidth=5
   theme_minimal() + theme(legend.position = "none") +
@@ -527,8 +472,8 @@ p1 <- data_quest_wide %>%
 #p1
 
 p2 <- data_quest_wide %>%
-  filter(!subID=="5ed7a0239e6b4a23ec6eb236") %>%
-  mutate(group = ifelse((subID %in% controls), "control", "psychoeducation")) %>%
+  filter(!uid=="subCA1_45") %>%
+  mutate(group = ifelse((uid %in% controls), "control", "psychoeducation")) %>%
   ggplot(aes(x=demogs_gender, fill=group, group=group)) +
   geom_bar(aes(y=..prop..), alpha=.6, position = "dodge") + 
   theme_minimal() + theme(legend.position = "none") + theme(axis.text.x = element_text(angle = 45, vjust=1.1, hjust=1)) +
@@ -538,8 +483,8 @@ p2 <- data_quest_wide %>%
 #p2  
 
 p3 <- data_quest_wide %>%
-  filter(!subID=="5ed7a0239e6b4a23ec6eb236") %>%
-  mutate(group = ifelse((subID %in% controls), "control", "psychoeducation")) %>%
+  filter(!uid=="subCA1_45") %>%
+  mutate(group = ifelse((uid %in% controls), "control", "psychoeducation")) %>%
   ggplot(aes(x=demogs_housing, fill=group, group=group)) +
   geom_bar(aes(y=..prop..), alpha=.6, position = "dodge") + 
   scale_x_discrete(labels=c("homeowner", "tenant", "other")) +
@@ -550,8 +495,8 @@ p3 <- data_quest_wide %>%
 #p3  
 
 p4 <- data_quest_wide %>%
-  filter(!subID=="5ed7a0239e6b4a23ec6eb236") %>%
-  mutate(group = ifelse((subID %in% controls), "control", "psychoeducation")) %>%
+  filter(!uid=="subCA1_45") %>%
+  mutate(group = ifelse((uid %in% controls), "control", "psychoeducation")) %>%
   ggplot(aes(x=demogs_employment, fill=group, group=group)) +
   geom_bar(aes(y=..prop..), alpha=.6, position = "dodge") + 
   scale_x_discrete(labels=c("employed", "not seeking", "unemployed")) +
@@ -562,8 +507,8 @@ p4 <- data_quest_wide %>%
 #p4 
 
 p5 <- data_quest_wide %>%
-  filter(!subID=="5ed7a0239e6b4a23ec6eb236") %>%
-  mutate(group = ifelse((subID %in% controls), "control", "psychoeducation")) %>%
+  filter(!uid=="subCA1_45") %>%
+  mutate(group = ifelse((uid %in% controls), "control", "psychoeducation")) %>%
   ggplot(aes(x=demogs_financial, fill=group, group=group)) +
   geom_bar(aes(y=..prop..), alpha=.6, position = "dodge") + 
   scale_x_discrete(labels=c("doing OK", "just getting by", "struggling")) +
@@ -574,8 +519,8 @@ p5 <- data_quest_wide %>%
 #p5
 
 p6 <- data_quest_wide %>%
-  filter(!subID=="5ed7a0239e6b4a23ec6eb236") %>%
-  mutate(group = ifelse((subID %in% controls), "control", "psychoeducation")) %>%
+  filter(!uid=="subCA1_45") %>%
+  mutate(group = ifelse((uid %in% controls), "control", "psychoeducation")) %>%
   ggplot(aes(x=study_acceptability, fill=group, group=group)) +
   geom_bar(aes(y=..prop..), alpha=.6, position = "dodge") + 
   scale_colour_manual(values=colours3) + 
@@ -586,8 +531,8 @@ p6 <- data_quest_wide %>%
 ((p1 + p2 + p3) / (p4 + p5 + p6))
 
 p7 <- data_quest_wide %>%
-  filter(!subID=="5ed7a0239e6b4a23ec6eb236") %>%
-  mutate(group = ifelse((subID %in% controls), "control", "psychoeducation")) %>%
+  filter(!uid=="subCA1_45") %>%
+  mutate(group = ifelse((uid %in% controls), "control", "psychoeducation")) %>%
   ggplot(aes(x=demogs_neurodiv, fill=group, group=group)) +
   geom_bar(aes(y=..prop..), alpha=.6, position = "dodge") + 
   scale_colour_manual(values=colours3) + 
@@ -596,8 +541,8 @@ p7 <- data_quest_wide %>%
 #p7
 
 p8 <- data_quest_wide %>%
-  filter(!subID=="5ed7a0239e6b4a23ec6eb236") %>%
-  mutate(group = ifelse((subID %in% controls), "control", "psychoeducation"),
+  filter(!uid=="subCA1_45") %>%
+  mutate(group = ifelse((uid %in% controls), "control", "psychoeducation"),
          prevPsychTx = ifelse(grepl("yes", demogs_tx), "yes", 
                               ifelse(demogs_tx=="prefer not to say", "prefer not to say", "no"))) %>%
   ggplot(aes(x=prevPsychTx, fill=group, group=group)) +
@@ -610,14 +555,14 @@ p8 <- data_quest_wide %>%
 (p7 + p8)
 
 p9 <- data_quest_wide %>%
-  filter(!subID=="5ed7a0239e6b4a23ec6eb236") %>%
-  mutate(condition = ifelse((subID %in% controls), "control", "psychoeducation"),
+  filter(!uid=="subCA1_45") %>%
+  mutate(condition = ifelse((uid %in% controls), "control", "psychoeducation"),
          tx_talkingTher = ifelse(grepl("talking therapy", demogs_tx), "yes", "no"),
          tx_meds = ifelse(grepl("medication", demogs_tx), "yes", "no"),
          tx_selfGuided = ifelse(grepl("self-guided", demogs_tx), "yes", "no"),
          tx_other = ifelse(grepl("other", demogs_tx), "yes", "no")) %>%
-  dplyr::select(subID, condition, contains("tx"), -demogs_tx) %>%
-  melt(id.vars=c("subID", "condition")) %>%
+  dplyr::select(uid, condition, contains("tx"), -demogs_tx) %>%
+  melt(id.vars=c("uid", "condition")) %>%
   ggplot(aes(x=variable, fill=value, group=interaction(variable, value))) +
   geom_bar(alpha=.6, position = "dodge") + 
   theme_minimal() + xlab("") +
@@ -626,14 +571,14 @@ p9 <- p9 + facet_wrap(~condition)
 p9
 
 p10 <- data_quest_wide %>%
-  filter(!subID=="5ed7a0239e6b4a23ec6eb236") %>%
+  filter(!uid=="subCA1_45") %>%
   mutate(dis_concentrate = ifelse(grepl("concentrate", demogs_disability), "yes", "no"),
          dis_people = ifelse(grepl("people", demogs_disability), "yes", "no"),
          dis_physEff = ifelse(grepl("physical effort", demogs_disability), "yes", "no"),
          dis_rrm = ifelse(grepl("maths", demogs_disability), "yes", "no"),
          dis_other = ifelse(grepl("other", demogs_disability), "yes", "no")) %>%
-  dplyr::select(subID, contains("dis"), -demogs_disability) %>%
-  melt(id.vars=c("subID")) %>%
+  dplyr::select(uid, contains("dis"), -demogs_disability) %>%
+  melt(id.vars=c("uid")) %>%
   ggplot(aes(x=variable, fill=value, group=interaction(variable, value))) +
   geom_bar(alpha=.6, position = "dodge") +
   theme_minimal() + xlab("type of functional disability") +
@@ -651,13 +596,13 @@ p10
 # # ! don't need to re-run if loading pre-processed csv data, including for reference
 # # catch questions
 # tmp <- data_quest_wide %>%
-#   dplyr::select(contains("catch_"), subID) %>%
+#   dplyr::select(contains("catch_"), uid) %>%
 #   mutate(catchQcorr1 = ifelse(catch_1>=2, 1, 0),
 #          catchQcorr2 = ifelse(catch_2=="yes", 1, 0),
 #          catchQscorr = catchQcorr1 + catchQcorr2,
 #          catchQsCorrect = ifelse(catchQscorr==2, "yes", "no")) %>%
-#   dplyr::select(subID, catchQsCorrect)
-# data_quest_wide <- merge(data_quest_wide, tmp, by = "subID")
+#   dplyr::select(uid, catchQsCorrect)
+# data_quest_wide <- merge(data_quest_wide, tmp, by = "uid")
 #
 # # PHQ9
 # PHQ9 <- data_quest_wide[, grep(pattern ='^PHQ9_.*', names(data_quest_wide))]  %>%
@@ -682,7 +627,7 @@ p10
 
 ```{r plot_selfreports}
 p1 <- data_quest_wide %>%
-  mutate(group = ifelse((subID %in% controls), "control", "psychoeducation")) %>%
+  mutate(group = ifelse((uid %in% controls), "control", "psychoeducation")) %>%
   ggplot(aes(x=PHQ9_total, fill=group, group=group)) +
   geom_histogram(alpha=.6, position = "identity") + 
   theme_minimal() + theme(legend.position = "none") +
@@ -692,7 +637,7 @@ p1 <- data_quest_wide %>%
   xlab("PHQ9 total")
 
 p3 <- data_quest_wide %>%
-  mutate(group = ifelse((subID %in% controls), "control", "psychoeducation")) %>%
+  mutate(group = ifelse((uid %in% controls), "control", "psychoeducation")) %>%
   ggplot(aes(x=miniSPIN_total, fill=group, group=group)) +
   geom_histogram(alpha=.6, position = "identity") + 
   theme_minimal() + theme(legend.position = "none") +
@@ -702,7 +647,7 @@ p3 <- data_quest_wide %>%
   xlab("miniSPIN total")
 
 p2 <- data_quest_wide %>%
-  mutate(group = ifelse((subID %in% controls), "control", "psychoeducation")) %>%
+  mutate(group = ifelse((uid %in% controls), "control", "psychoeducation")) %>%
   ggplot(aes(x=DAS_total, fill=group, group=group)) +
   geom_histogram(alpha=.6, position = "identity") + 
   theme_minimal() + theme(legend.position = "none") +
@@ -710,16 +655,6 @@ p2 <- data_quest_wide %>%
   scale_colour_manual(values=colours3) + 
   scale_fill_manual(values=colours3) +
   xlab("DAS-SF total")
-
-p4 <- data_quest_wide %>%
-  mutate(group = ifelse((subID %in% controls), "control", "psychoeducation")) %>%
-  filter(!subID=="5ed7a0239e6b4a23ec6eb236") %>%
-  ggplot(aes(x=catchQsCorrect, fill=group, group=group)) +
-  geom_bar(alpha=.6, position = "dodge") + 
-  theme_minimal() + xlab("both self-report catch correct?") + theme(legend.position = "none") #+
-  #scale_fill_manual(values=wes_palette(n=2, name="GrandBudapest2"))
-
-((p1 + p2 ) / ( p3 + p4 ))
 
 (p1 + p2 + p3 + p8)
 ```

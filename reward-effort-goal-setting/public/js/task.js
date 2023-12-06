@@ -6,13 +6,11 @@ import StartTaskScene from "./scenes/startTaskScene.js";
 // first run of task + questions:
 import MainTask from "./scenes/mainTask.js";
 import TaskEndScene from "./scenes/taskEndScene.js";
-import PostTaskQuestions from "./scenes/postTaskQuestions.js";
 // intervention scene:
 import InterventionScene from "./scenes/interventionScene.js";
 // second run of task (randomized cond) + questions:
 import MainTask2 from "./scenes/mainTask2.js";
 import TaskEndScene2 from "./scenes/taskEndScene2.js";
-import PostTaskQuestions2 from "./scenes/postTaskQuestions2.js";
 // finish up and return to any other content:
 import TheEnd from "./scenes/theEnd.js";
 
@@ -43,13 +41,11 @@ const config = {
             //
             MainTask, 
             TaskEndScene,
-            PostTaskQuestions,
             //
             InterventionScene,
             //
             MainTask2,           
             TaskEndScene2,
-            PostTaskQuestions2,
             //
             TheEnd
             ],              // construct the experiment from componenent scenes

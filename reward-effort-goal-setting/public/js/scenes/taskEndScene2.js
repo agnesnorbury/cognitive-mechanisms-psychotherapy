@@ -31,11 +31,6 @@ export default class TaskEndScene2 extends Phaser.Scene {
         ///////////////////PAGE ONE////////////////////
         var mainTxt = ("Thank you for playing.\n\n" +
                        
-                        "  We will now ask you to answer  \n"+
-                        "again the short questions about\n"+
-                        "how you are feeling right now,\n"+
-                        "  before moving on to the final part of the study.\n\n  "+
-                       
                         "Press the button below to continue.\n\n");
         var buttonTxt = "continue";
         var pageNo = 1;
@@ -51,6 +46,6 @@ export default class TaskEndScene2 extends Phaser.Scene {
     }
     
     nextScene() {
-        this.scene.start('PostTaskQuestions2');
+        this.scene.start('TheEnd');
     } 
 }

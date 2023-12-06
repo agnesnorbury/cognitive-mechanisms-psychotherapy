@@ -1,0 +1,666 @@
+---
+title: "modComp crossover study model-based analysis of reward-effort decision-making task"
+output:
+  html_document:
+    html-math-method:
+      method: mathjax
+  #  pdf_document:
+  # extra_dependencies: ["bbm"]
+  # fig_caption: yes
+---
+
+```{r setup, include=FALSE}
+# knitr options
+knitr::opts_chunk$set(echo=FALSE, error=TRUE, warning=FALSE, message=FALSE, fig.align='center')
+
+# load packages
+packages <- c("rstan", "dplyr", "tidyr", "bayesplot", "loo", "hBayesDM", "tidybayes", "forcats",
+              "ggpmisc", "patchwork", "devtools", "reshape2", "ggExtra", "unikn", "svglite",
+              "rstatix", "boot")
+if (length(setdiff(packages, rownames(installed.packages()))) > 0 ) {
+  install.packages(setdiff(packages, rownames(installed.packages())))
+}
+lapply(packages, require, character.only=TRUE)
+
+# set wd
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+
+# what task version to filter for
+task_ver <- "crossover-study-rew-eff"
+
+# # create figures subdir
+# subdir <- "figures"
+# if (!file.exists(subdir)){
+#   dir.create(file.path(dirname(rstudioapi::getActiveDocumentContext()$path), subdir))
+# }
+```
+
+```{r setup_rstan}
+rstan_options(auto_write = TRUE)   # write the models so we don't have to recompile each time
+nCores <- parallel::detectCores()    # get number of cores available for parallelisation
+```
+
+```{r setup_colour_scales}
+# lets set some custom colour scales for our plots using unikn
+# seecol(pal_unikn_pair)
+palette2 <- usecol(pal_unikn_pair)
+# colours by intervention group
+colours3 <- c("planning" = palette2[11],
+              #"control" = palette2[10],          # planning intervention control 
+              "psychoeducation" = palette2[2]
+              #"control" = palette2[3],           # psychoeducation intervention control
+              )
+# colours by model parameter type
+colours2 <- c("group mean" = palette2[14],
+              "intervention effect" = palette2[11],   # here, intervention of interest = planning
+              "amotivation" = palette2[5],
+              "negative cognition" = palette2[13]
+              )
+```
+
+```{r load_data}
+# load long format data
+data_long_all <- read.csv(file=paste0("./", task_ver, "-task-data-long-anon.csv")) %>%
+  dplyr::select(-X, -nTrials) %>%
+  filter(!uid %in% list("subREX_1", "subREX_17",
+                          "subREX_56", "subREX_102",
+                          "subREX_148")) %>%  # rm ppts who failed both catch trials
+  arrange(uid, taskNo, trialNo) %>%
+  mutate(sess = taskNo,
+         condition = group,
+         choice01=recode(choice, "route 1"=0, "route 2"=1))
+
+## get number of time points etc
+nPpts <- length(unique(data_long_all$uid))    # get number of participants
+nTimes <- max(data_long_all$sess)             # get number of sessions
+nTrials_all <- data_long_all %>%              # get number of trials actually completed
+  group_by(uid) %>%
+  summarize(nTrials = n()) %>%
+  mutate(ID2=seq(1, nPpts, 1))                # assign new sequential numeric uids since we've excluded
+nTrials_max <- nTrials_all %>%
+  {max(.$nTrials)}
+
+data_long_all <- merge(data_long_all, nTrials_all, by="uid")
+# # check this worked as expected
+# tmp <- data_long_all %>%
+#   dplyr::select(uid, ID, ID2) %>%
+#   distinct()
+
+# get lists of subjects IDs by condition for use with other data
+planning_subs <- data_long_all %>%
+  filter(condition=="planning") %>%
+  dplyr::select(uid, ID2)
+planners <- as.list(unique(planning_subs$uid))
+plan_IDs <- as.list(unique(planning_subs$ID2))
+
+# get ordered list of intervention conditions
+int_conds <- data_long_all %>%
+  dplyr::select(ID2, condition) %>%
+  distinct() %>%
+  mutate(condition01 = ifelse(condition=="planning", 1, 0))
+```
+
+```{r stan_format_data}
+## create arrays of choice options and responses for each participant and time point
+r1 <- e1 <- r2 <- e2 <- choice01 <- array(0, dim = c(nPpts, nTimes, nTrials_max/2))
+nT_ppts <- array(nTrials_max/2, dim = c(nPpts, nTimes))
+for (i in 1:nPpts) {
+  for (t in 1:nTimes) {
+  r1[i,t,] <- with(data_long_all, trialReward1[ID2==i & sess==t])
+  e1[i,t,] <- with(data_long_all, trialEffortPropMax1[ID2==i & sess==t])
+  r2[i,t,] <- with(data_long_all, trialReward2[ID2==i & sess==t])
+  e2[i,t,] <- with(data_long_all, trialEffortPropMax2[ID2==i & sess==t])
+  choice01[i,t,] <- with(data_long_all, choice01[ID2==i & sess==t]) 
+  }
+}
+
+## create list to pass to stan
+data_list <- list(
+  nPpts = nPpts,                 # number of participants
+  nTimes = nTimes,               # number of times each participant completed the task
+  condition = int_conds$condition01,  # intervention condition for each participant
+  nTrials_max = nTrials_max/2,     # max number of trials per participant
+  nT_ppts = nT_ppts,             # actual number of trials per participant
+  rew1 = r1,                     # reward level for left option 
+  eff1 = e1,                     # effort level for left balloon 
+  rew2 = r2,                     # reward level for right option 
+  eff2 = e2,                     # effort level for right option
+  choice01 = choice01            # chosen option ([0,1]=[left,right]), for bernoulli logit
+)
+```
+
+### models with an additive factor of intervention
+
+```{r stan_int_models}
+## specify full model name and list of parameters to save in output (otherwise big)
+model <- "rewEff-linear-bernoulli-multisess-intervention-additive"
+params_to_save <- c("rewSens", "effSens", "mu_rewSens", "mu_effSens", "sigma_rewSens",
+                    "sigma_effSens", "rewSens_int", "effSens_int", "y_rep", "R_rewSens", "R_effSens",
+                    "sum_log_lik")
+
+## fit model using rstan
+fit <- stan(
+  file = paste0("./stan-models/", model, ".stan"),
+  data = data_list,
+  pars = params_to_save,
+  include = TRUE,           # only save the listed parameters, not other intermediates
+  chains = 4,               # run 4 separate chains to assess convergence
+  warmup = 1000,            # these are used to tune the sampler and ’burn in’
+  iter = 2000,              # number of iterations (#kept = chains*(iter - warmup))
+  cores = nCores            # chains to be run in parallel on separate cores (if possible)
+)
+
+## save
+saveRDS(fit, file = paste0("./stan-fits/", model, "-", task_ver, "-fit.rds"))
+
+# summary of sampling diagnostics
+check_hmc_diagnostics(fit)
+
+# plot pairs of sampling distributions for an example participant
+pairs(fit, pars=c("rewSens[1,1]", "rewSens[2,1]", "effSens[1,1]", "effSens[2,1]"))
+
+# plot pairs of sampling distributions for th group level means
+pairs(fit, pars=c("mu_rewSens[1]", "mu_rewSens[2]", "mu_effSens[1]", "mu_effSens[2]"))
+ 
+# plot intervention and individual t2 a[irs ]
+pairs(fit, pars=c("rewSens_int", "effSens_int"))
+```
+
+```{r test_retest_bothsess_plot}
+# load model
+fit <- readRDS(file = paste0("./stan-fits/", model , "-", task_ver, "-fit.rds"))
+  
+# test-retest posteriors
+R_theta_neg <- as.data.frame(summary(fit, pars = c("R_rewSens"))$summary)
+R_theta_pos <- as.data.frame(summary(fit, pars = c("R_effSens"))$summary)
+# print mean and mean se for each parameter
+print(paste0("test-retest R for rewSens (mean): ", round(R_theta_neg$mean[2],2)), quote=FALSE)
+print(paste0("test-retest R for rewSens (SE of mean): ", round(R_theta_neg$se_mean[2],3)), quote=FALSE)
+
+print(paste0("test-retest R for effSens (mean): ", round(R_theta_pos$mean[2],2)), quote=FALSE)
+print(paste0("test-retest R for effSens (SE of mean): ", round(R_theta_pos$se_mean[2],3)), quote=FALSE)
+
+# get posterior param estimates from session 1 vs 2
+posts <- as.data.frame(summary(fit, pars = c("rewSens", "effSens"))$summary) %>%
+  dplyr::select(mean, sd) %>%
+  add_rownames(var = "var") %>%
+  separate(var, sep="\\[|\\,|\\]", into=c("parameter", "ID2", "session"), 
+           remove=TRUE, extra="drop")
+
+## plot
+p1 <- posts %>%
+  pivot_wider(id_cols=c("ID2", "parameter"), names_from = "session", 
+              values_from = c("mean", "sd")) %>%
+  mutate(condition = ifelse(ID2 %in% plan_IDs, "planning", "psychoeducation")) %>%
+  ggplot(aes(x=mean_1, y=mean_2, group=condition, colour=condition)) +
+  geom_abline(slope = 1, linetype="dashed", colour="grey") +
+  geom_smooth(method = "lm", se=FALSE, formula = y ~ x) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = mean_1-sd_1, xmax = mean_1+sd_1), alpha=.4) + 
+  geom_errorbar(aes(ymin = mean_2-sd_2, ymax = mean_2+sd_2), alpha=.4) +
+  scale_colour_manual(values=colours3) + 
+  scale_fill_manual(values=colours3) +
+  labs(x = "mean (sd) time 1", y ="mean (sd) time 2") + 
+  theme_minimal() + facet_wrap(~parameter, scales = "free") + labs() + theme(aspect.ratio=4/3)
+print(p1)
+# ggsave(filename = paste0("./figures/", task_ver, "-params-by-time.svg"),
+#        plot = last_plot(), device = "svg", dpi = 300)
+
+# visualize differences in posterior group means between timepoints and posterior estimates of intervention effects using tidybayes package (quick and pretty!)
+fit_tidy <- fit %>%
+  gather_draws(`mu_effSens[1]`, `mu_effSens[2]`, `mu_rewSens[1]`, `mu_rewSens[2]`,
+               effSens_int, rewSens_int) %>%
+  mutate(var_type = ifelse(grepl("int", .variable), "intervention effect", "group mean"),
+         var_type = factor(var_type, levels = c("group mean", "intervention effect")),
+         .variable = factor(.variable, levels = c("mu_effSens[1]", "mu_effSens[2]",
+                                                  "mu_rewSens[1]", "mu_rewSens[2]",
+                                                   "effSens_int", "rewSens_int")))
+p <- fit_tidy %>%
+  ggplot(aes(y = fct_rev(.variable), x = .value, fill = var_type)) +
+  stat_gradientinterval(.width = c(.9, .5),  slab_size = 1) +
+  scale_fill_manual(values = colours2) +
+  geom_vline(xintercept = 0, colour = "grey") + theme_minimal() +
+  theme(legend.position = "none") + theme(aspect.ratio=4/3) + labs(x="", y="")
+p
+# ggsave(filename = paste0("./figures/", task_ver, "-means-ints-CIs-gradient.svg"),
+#        plot = last_plot(), device = "svg", dpi = 300)
+
+# print numerical values
+params90cis <- summary(fit, pars = c("mu_effSens[1]", "mu_effSens[2]",
+                                     "mu_rewSens[1]", "mu_rewSens[2]",
+                                     "rewSens_int", "effSens_int"), probs = c(0.1, 0.9))$summary
+print(params90cis)
+
+## new plotting:
+## re-transform group means based on hard constraints applied during estimate and
+## convert intervention effects to ~SMDs
+# effSens_int_std = effSens_int_sd / sqrt(sigma_effSens[2])
+# rewSens_int_std = rewSens_int_sd / sqrt(sigma_rewSens[2])
+params90cis <- summary(fit, pars = c("sigma_effSens[2]", "sigma_rewSens[2]"), probs = c(0.1, 0.9))$summary
+sigma_effSens_t2 <- params90cis[1,1]
+sigma_rewSens_t2 <- params90cis[2,1]
+
+fit_tidy2 <- fit_tidy %>%
+  mutate(.value2 = case_when(.variable =="mu_effSens[1]" ~ -1 + inv.logit(.value)*10,
+                             .variable =="mu_effSens[2]" ~ -1 + inv.logit(.value)*10,
+                             .variable =="mu_rewSens[1]" ~ -1 + inv.logit(.value)*4,
+                             .variable =="mu_rewSens[2]" ~ -1 + inv.logit(.value)*4,
+                             .variable =="effSens_int" ~ .value/sqrt(sigma_effSens_t2),
+                             .variable =="rewSens_int" ~ .value/sqrt(sigma_rewSens_t2),
+                             TRUE ~ .value))
+p2 <- fit_tidy2 %>%
+  ggplot(aes(y = fct_rev(.variable), x = .value2, fill = var_type)) +
+  stat_gradientinterval(.width = c(.9, .5),  slab_size = 1) +
+  scale_fill_manual(values = colours2) +
+  geom_vline(xintercept = 0, colour = "grey") + theme_minimal() +
+  theme(legend.position = "none") + theme(aspect.ratio=4/3) + labs(x="", y="")
+p2
+# ggsave(filename = paste0("./figures/", task_ver, "-rew-eff-task-means-ints-CIs-gradient-smd.svg"),
+#        plot = last_plot(), device = "svg", dpi = 300)
+```
+
+
+
+```{r sx_corr_merge}
+# load sx data for rew-eff participants
+data_quest_wide <- read.csv(file=paste0(task_ver, "-self-report-data-anon.csv")) %>%
+  dplyr::select(-X) %>%
+  filter(!uid %in% list("subREX_189", "subREX_190",
+                          "subREX_1", "subREX_17",
+                          "subREX_56", "subREX_102",
+                          "subREX_148"))  # rm ppts who failed self-report catch items
+
+# get key linking numeric sequential IDs in model outtput back to original prolific identifiers
+ID_trans <- data_long_all %>%
+  dplyr::select(uid, ID2) %>%
+  distinct()
+
+# merge sx into posts data
+posts_uids <- merge(posts, ID_trans, by="ID2")
+posts_sx <- merge(posts_uids, data_quest_wide, by = "uid")
+# # check this worked as expected
+# tmp <- posts_sx %>%
+#   dplyr::select(uid, ID2) %>%
+#   distinct()
+```
+
+```{r sx_corr_plot}
+# plot relationships between t1 posterior means and sx scores
+p1 <- posts_sx %>%
+  filter(session==1) %>%
+  ggplot(aes(x = AMI_behavActiv, y = mean)) +
+  geom_point() +
+  geom_smooth(method = "lm", se=TRUE, alpha=.2, color="black", formula = y ~ x) +
+  stat_poly_eq(formula = y~x, label.x = "right", label.y = "top",
+               aes(label = paste(stat(rr.label), stat(p.value.label), sep = "~~~")),
+               parse = TRUE) +
+  theme_minimal() + facet_grid(rows = vars(session), cols = vars(parameter)) 
+p1
+
+p2 <- posts_sx %>%
+  filter(session==1) %>%
+  ggplot(aes(x = PHQ9_total, y = mean)) +
+  geom_point() +
+  geom_smooth(method = "lm", se=TRUE, alpha=.2, color="black", formula = y ~ x) +
+  stat_poly_eq(formula = y~x, label.x = "right", label.y = "top",
+               aes(label = paste(stat(rr.label), stat(p.value.label), sep = "~~~")),
+               parse = TRUE) +
+  theme_minimal() + facet_grid(rows = vars(session), cols = vars(parameter)) 
+p2
+
+p3 <- posts_sx %>%
+  filter(session==1) %>%
+  ggplot(aes(x = miniSPIN_total, y = mean)) +
+  geom_point() +
+  geom_smooth(method = "lm", se=TRUE, alpha=.2, color="black", formula = y ~ x) +
+  stat_poly_eq(formula = y~x, label.x = "right", label.y = "top",
+               aes(label = paste(stat(rr.label), stat(p.value.label), sep = "~~~")),
+               parse = TRUE) +
+  theme_minimal() + facet_grid(rows = vars(session), cols = vars(parameter)) 
+p3
+
+p4 <- posts_sx %>%
+  filter(session==1) %>%
+  ggplot(aes(x = DAS_total, y = mean)) +
+  geom_point() +
+  geom_smooth(method = "lm", se=TRUE, alpha=.2, color="black", formula = y ~ x) +
+  stat_poly_eq(formula = y~x, label.x = "right", label.y = "top",
+               aes(label = paste(stat(rr.label), stat(p.value.label), sep = "~~~")),
+               parse = TRUE) +
+  theme_minimal() + facet_grid(rows = vars(session), cols = vars(parameter)) 
+p4
+```
+
+```{r sx_grm_2}
+# analysis of symptom data to create 'latent' symptom scores, using a form of IRT called a Graded Response Model
+# first, grab the data we want to model
+nPpts_both <- length(unique(posts_sx$uid))
+
+data_quest_wide_both <- data_quest_wide %>%
+  filter(uid %in% unique(posts_sx$uid))
+
+sx_grm <- data_quest_wide_both %>%
+  dplyr::select(PHQ9_1, PHQ9_4, AMI_5, AMI_9, AMI_10, AMI_11, AMI_12, AMI_15,                  # amotivation
+                PHQ9_2, PHQ9_6, DAS_1, DAS_2, DAS_3, DAS_4, DAS_5, DAS_6, DAS_8, DAS_9,        # neg cog
+                uid) %>%
+  arrange(uid) %>%
+  mutate(IDsx = seq(1, nPpts_both, 1)) %>%
+  mutate(across(contains("AMI"),
+               ~recode(., `0`=4,`1`=3,`2`=2,`3`=1, `4`=0))) %>%
+  mutate(across(contains("DAS"),
+               ~recode(., `0`=3,`1`=2,`2`=1,`3`=0))) %>% 
+  melt(id.vars=c("IDsx", "uid")) %>%
+  arrange(IDsx, variable) %>%
+  mutate(variable2 = unclass(variable))
+
+nItems <- max(sx_grm$variable2)
+
+## create list to pass to stan
+data_list <- list(
+  nPpts = nPpts_both,         # number of participants
+  nItems = nItems,            # number of items per participant
+  nTraits = 2,
+  nItemsA = 8,
+  N = nrow(sx_grm),           # total number of observations
+  jj = sx_grm$IDsx,           # person id for observation n
+  ii = sx_grm$variable2,      # item id for observation n
+  y = sx_grm$value            # response for observations n; y in {0 ... m_i}
+)
+```
+
+
+```{r fit_grm}
+## specify full model name and list of parameters to save in output (otherwise big)
+model <- "m_grm_2_multi"
+
+## fit model using rstan
+fit_grm <- stan(
+  file = paste0("./stan-models/", model, ".stan"),
+  data = data_list,
+  chains = 4,               # run 4 separate chains to assess convergence
+  warmup = 1000,            # these are used to tune the sampler and ’burn in’
+  iter = 2000,              # number of iterations (#kept = chains*(iter - warmup))
+  cores = nCores            # chains to be run in parallel on separate cores (if possible)
+)
+
+## save
+saveRDS(fit_grm, file = paste0("./stan-fits/", task_ver, "-", model, "-fit.rds"))
+# fit_grm <- readRDS(file = paste0("./stan-fits/", task_ver, "-", model, "-fit.rds"))
+
+# diagnostics
+check_hmc_diagnostics(fit_grm)
+
+# look at posterior marginal param dists
+params <- rstan::extract(fit_grm)
+hist(params$theta_a, main="", xlab="relative participant endorsement",
+            yaxt='n', ylab="")
+hist(params$theta_n, main="", xlab="relative participant endorsement",
+            yaxt='n', ylab="")
+
+hist(params$alpha_a, main="", xlab="overall item discriminability",
+            yaxt='n', ylab="")
+hist(params$alpha_n, main="", xlab="overall item discriminability",
+            yaxt='n', ylab="")
+
+hist(params$kappa, main="", xlab="overall item difficulty",
+            yaxt='n', ylab="")
+
+pairs(fit_grm, pars=c("theta_a[1]","alpha_a"))
+pairs(fit_grm, pars=c("theta_n[1]","alpha_n"))
+
+# plot contribution of each item to scores
+var_dict <- data_quest_wide_both %>%
+  dplyr::select(PHQ9_1, PHQ9_4, AMI_5, AMI_9, AMI_10, AMI_11, AMI_12, AMI_15,           # amotivation
+                PHQ9_2, PHQ9_6, DAS_1, DAS_2, DAS_3, DAS_4, DAS_5, DAS_6, DAS_8, DAS_9, # neg cog
+                uid 
+                ) %>%
+  mutate(IDsx = seq(1, nPpts_both, 1)) %>%
+  melt(id.vars=c("IDsx", "uid")) %>%
+  arrange(IDsx, variable) %>%
+  mutate(variable2 = unclass(variable)) %>%
+  dplyr::select(variable, variable2) %>%
+  distinct()
+
+fit_grm_tidy <- fit_grm %>%
+  spread_draws(alpha_a[itema], alpha_n[itemb]) %>%
+  mutate(itema = as.factor(itema),
+         itemb = as.factor(itemb))
+
+pa <- fit_grm_tidy %>%
+  mutate(scale = "amotivation") %>%
+  ggplot(aes(x = alpha_a, y = fct_rev(itema), fill = scale)) +
+  stat_gradientinterval(.width = c(.9, .5)) +
+  geom_vline(xintercept=0, colour="grey") + 
+  geom_vline(xintercept=1, colour="grey", linetype="dashed") +
+  scale_y_discrete(labels = var_dict$variable[1:8]) + xlim(-1,5) + #xlim(-1,20) +
+  labs(x="posterior item discriminability\n for behavioural amotivation", y="") +
+  scale_fill_manual(values = colours2) +
+  theme_tidybayes() + theme(legend.position="none") + theme(aspect.ratio=4.5/3)
+pa
+# ggsave(filename = paste0("./figures/", task_ver, "-", model,
+#                          "-alpha-amotivation-gradient.svg"),
+#        plot = last_plot(), device = "svg", dpi = 300)
+
+pn <- fit_grm_tidy %>%
+  mutate(scale = "negative cognition") %>%
+  ggplot(aes(x = alpha_n, y = fct_rev(itemb), fill = scale)) +
+  stat_gradientinterval(.width = c(.9, .5)) +
+  geom_vline(xintercept=0, colour="grey") + 
+  geom_vline(xintercept=1, colour="grey", linetype="dashed") +
+  scale_y_discrete(labels = var_dict$variable[9:19]) + xlim(-1,5) + #xlim(-1,20) +
+  labs(x="posterior item discriminability\n for negative cognition", y="") +
+  scale_fill_manual(values = colours2) +
+  theme_tidybayes() + theme(legend.position="none") + theme(aspect.ratio=4.5/3)
+pn
+# ggsave(filename = paste0("./figures/", task_ver, "-", model, 
+#                          "-alpha-negcog-gradient.svg"),
+#        plot = last_plot(), device = "svg", dpi = 300)
+```
+
+```{r sx_grm_merge}
+# get posterior estimates for grm parameter
+posts_grm <- as.data.frame(summary(fit_grm, pars = c("theta_a", "theta_n"))$summary) %>%
+  dplyr::select(mean, sd) %>%
+  add_rownames(var = "var") %>%
+  separate(var, sep="\\[|\\,|\\]", into=c("parameter", "IDsx"), 
+           remove=TRUE, extra="drop") %>%
+  mutate(IDsx = as.numeric(IDsx))
+
+# merge sx into posts data
+# get key linking numeric sequential IDs in model outtput back to original prolific identifiers
+ID_trans2 <- sx_grm %>%
+  dplyr::select(uid, IDsx) %>%
+  distinct()
+
+posts_uids_grm <- merge(posts_grm, ID_trans2, by="IDsx")
+posts_sx_grm <- merge(posts_uids_grm, data_quest_wide, by = "uid")
+
+# # check this worked as expected
+# tmp <- posts_sx_grm %>%
+#   dplyr::select(uid, IDsx) %>%
+#   distinct()
+
+# plot relationships between grm posterior means and sx scores
+labs <- c("behavioural amotivation", "negative cognition")
+names(labs) <- c("theta_a", "theta_n")
+
+p3 <- posts_sx_grm  %>%
+  ggplot(aes(x = PHQ9_total, y = mean)) +
+  geom_point() +
+  geom_smooth(method = "lm", se=TRUE, alpha=.2, color="black", formula = y ~ x) +
+  stat_poly_eq(formula = y~x, label.x = "right", label.y = "top",
+               aes(label = paste(stat(rr.label), stat(p.value.label), sep = "~~~")),
+               parse = TRUE) +
+  theme_minimal() + xlab("PHQ9 total") + ylab("posterior mean") + facet_wrap(~parameter, labeller = labeller(parameter = labs)) + theme(strip.text.x = element_text(size = 11))
+p3
+
+p5 <- posts_sx_grm  %>%
+  ggplot(aes(x = PHQ9_D, y = mean)) +
+  geom_point() +
+  geom_smooth(method = "lm", se=TRUE, alpha=.2, color="black", formula = y ~ x) +
+  stat_poly_eq(formula = y~x, label.x = "right", label.y = "top",
+               aes(label = paste(stat(rr.label), stat(p.value.label), sep = "~~~")),
+               parse = TRUE) +
+  theme_minimal() + xlab("PHQ9 functional disability") + ylab("posterior mean") + facet_wrap(~parameter, labeller = labeller(parameter = labs)) + theme(strip.text.x = element_text(size = 11))
+p5
+
+p6 <- posts_sx_grm  %>%
+  pivot_wider(id_cols = c("uid", "IDsx"), names_from = parameter, values_from = mean) %>%
+  ggplot(aes(x = theta_a, y = theta_n)) +
+  geom_point() +
+  geom_smooth(method = "lm", se=TRUE, alpha=.2, color="black", formula = y ~ x) +
+  stat_poly_eq(formula = y~x, label.x = "right", label.y = "top",
+               aes(label = paste(stat(rr.label), stat(p.value.label), sep = "~~~")),
+               parse = TRUE) +
+  theme_minimal() + xlab("behavioural amotivation") + ylab("negative cognition")
+p6
+
+# tmp <- posts_sx_grm  %>%
+#   pivot_wider(id_cols = c("uid", "IDsx"), names_from = parameter, values_from = mean) 
+# cor.test(tmp$theta_a, tmp$theta_n)
+```
+
+```{r pre_joint_data}
+# filter task data 
+data_long_all_both <- data_long_all %>%
+  filter(uid %in% data_quest_wide_both$uid) %>%
+  arrange(uid, sess) %>%
+  mutate(IDb = rep(seq(1, nPpts_both, 1), each = nTrials_max))
+
+nPpts_both <- length(unique(data_long_all_both$uid))
+
+# # check the above has worked as expected
+# tmp <- data_long_all_both %>%
+#   dplyr::select(uid, ID, ID2, IDb) %>%
+#   distinct()
+grep(FALSE, unique(data_long_all_both$uid)==unique(data_quest_wide_both$uid))
+grep(FALSE, unique(data_long_all_both$IDb)==unique(sx_grm$IDsx))
+
+## create arrays of choice options and responses for each participant and time point
+r1 <- e1 <- r2 <- e2 <- choice01 <- array(0, dim = c(nPpts_both, nTimes, nTrials_max/2))
+nT_ppts <- array(nTrials_max/2, dim = c(nPpts_both, nTimes))
+for (i in 1:nPpts_both) {
+  for (t in 1:nTimes) {
+  r1[i,t,] <- with(data_long_all_both, trialReward1[IDb==i & sess==t])
+  e1[i,t,] <- with(data_long_all_both, trialEffortPropMax1[IDb==i & sess==t])
+  r2[i,t,] <- with(data_long_all_both, trialReward2[IDb==i & sess==t])
+  e2[i,t,] <- with(data_long_all_both, trialEffortPropMax2[IDb==i & sess==t])
+  choice01[i,t,] <- with(data_long_all_both, choice01[IDb==i & sess==t]) 
+  }
+}
+
+# regen int cond list
+int_conds_both <- data_long_all_both %>%
+  dplyr::select(IDb, condition) %>%
+  distinct() %>%
+  mutate(condition01 = ifelse(condition=="planning", 1, 0))
+
+## create list to pass to stan
+data_list <- list(
+  nPpts = nPpts_both,            # number of participants
+  nTimes = nTimes,               # number of times each participant completed the task
+  condition = int_conds_both$condition01,      # intervention condition for each participant
+  nTrials_max = nTrials_max/2,   # max number of trials per participant
+  nT_ppts = nT_ppts,             # actual number of trials per participant
+  rew1 = r1,                     # reward level for left option 
+  eff1 = e1,                     # effort level for left balloon 
+  rew2 = r2,                     # reward level for right option 
+  eff2 = e2,                     # effort level for right option
+  choice01 = choice01,           # chosen option ([0,1]=[left,right]), for bernoulli logit
+  nItems = nItems,               # number of items per participant
+  nTraits = 2,                   # number of constructs/traits to measure across items
+  nItemsA = 8,                   # number of items in first trait/construct
+  N = nrow(sx_grm),              # total number of observations
+  jj = sx_grm$IDsx,              # person id for observation n
+  ii = sx_grm$variable2,         # item id for observation n
+  y = sx_grm$value               # response for observations n; y in {0 ... m_i}
+)
+```
+
+
+```{r fit_joint_baseline}
+## specify full model name and list of parameters to save in output
+model <- "rewEff-linear-bernoulli-multisess-intervention-additive-joint-multiclin-eff-baseline3"
+
+## fit model using rstan
+fit <- stan(
+  file = paste0("./stan-models/", model, ".stan"),
+  data = data_list,
+  chains = 4,               # run 4 separate chains to assess convergence
+  warmup = 1000,            # these are used to tune the sampler and ’burn in’
+  iter = 2000,              # number of iterations (#kept = chains*(iter - warmup))
+  cores = nCores            # chains to be run in parallel on separate cores (if possible)
+)
+
+## save
+saveRDS(fit, file = paste0("./stan-fits/", model, "-", task_ver, "-fit.rds"))
+# fit <- readRDS(file = paste0("./stan-fits/", model, "-", task_ver, "-fit.rds"))
+
+# diagnostics
+check_hmc_diagnostics(fit)
+
+## plot using tidybayes pakcage (quick and pretty!)
+fit_tidy <- fit %>% 
+  gather_draws(beta_b1, beta_b2,
+               beta_int1, beta_int2
+               ) %>%
+  mutate(var_type = ifelse(grepl("_int$", .variable), "intervention effect", 
+                           ifelse(grepl("1", .variable), "amotivation", 
+                                  ifelse(grepl("2", .variable), "negative cognition", "amotivation"))),
+         var_type = factor(var_type, levels = c("group mean", "intervention effect", "amotivation",
+                                                "negative cognition")),
+         .variable = factor(.variable, levels = c("beta_b1", "beta_b2",
+                                                  "beta_int1", "beta_int2"
+                                                  )))
+p <- fit_tidy %>%
+  ggplot(aes(y = fct_rev(.variable), x = .value, fill = var_type)) +
+  stat_gradientinterval(.width = c(.9, .5),  slab_size = 1) +
+  scale_fill_manual(values = colours2) +
+  geom_vline(xintercept = 0, colour = "grey") + theme_minimal() + xlim(-1.2,1.2) +
+  theme(legend.position = "none") + theme(aspect.ratio=4/7) + labs(x="", y="") +
+  theme(text = element_text(size = 20))
+p
+# ggsave(filename = paste0("./figures/", task_ver, "-", model,
+#                          "-joint-baseline-CIs-gradient.svg"),
+#        plot = last_plot(), device = "svg", dpi = 300)
+
+# print numerical values
+params90cis <- summary(fit, pars = c("rewSens_int", "effSens_int", 
+                                     "beta_b1", "beta_b2", 
+                                     "beta_int1","beta_int2"
+                                     ), 
+                       probs = c(0.1, 0.9))$summary
+print(params90cis)
+
+## convert to standardized
+# beta_b1_std = (std(theta_A)) / sqrt(sigma_effSens[1]) * beta_b1
+# beta_int1_std = (std(theta_A) / sqrt(sigma_effSens[2]) * beta_int1
+# first, get posterior (pooled) variance estimates for effSens at each time point
+params90cis <- summary(fit, pars = c("sigma_effSens[1]", "sigma_effSens[2]"), 
+                       probs = c(0.1, 0.9))$summary
+sigma_effSens_t1 <- params90cis[1,1]
+sigma_effSens_t2 <- params90cis[2,1]
+# for thetas, which are non hierarchically estimates, we will have to take the SD across posterior mean estimates
+tmp  <- summary(fit, pars = "theta_a", probs = c(0.1, 0.9))$summary
+sd_thetaA <- sd(tmp[,1])
+tmp  <- summary(fit, pars = "theta_n", probs = c(0.1, 0.9))$summary
+sd_thetaN <- sd(tmp[,1])
+
+fit_tidy2 <- fit_tidy %>%
+  mutate(.value2 = case_when(.variable =="beta_b1" ~ sd_thetaA/sqrt(sigma_effSens_t1) *.value,
+                             .variable =="beta_b2" ~  sd_thetaN/sqrt(sigma_effSens_t1) *.value,
+                             .variable =="beta_int1" ~ sd_thetaA/sqrt(sigma_effSens_t2) *.value,
+                             .variable =="beta_int2" ~  sd_thetaN/sqrt(sigma_effSens_t2) *.value,
+                             TRUE ~ .value))
+p2 <- fit_tidy2 %>%
+  ggplot(aes(y = fct_rev(.variable), x = .value2, fill = var_type)) +
+  stat_gradientinterval(.width = c(.9, .5),  slab_size = 1) +
+  scale_fill_manual(values = colours2) +
+  geom_vline(xintercept = 0, colour = "grey") + theme_minimal() + xlim(-1,1) +
+  theme(legend.position = "none") + theme(aspect.ratio=4/7) + labs(x="", y="") +
+  theme(text = element_text(size = 20))
+p2
+# ggsave(filename = paste0("./figures/", task_ver, "-", model,
+#                          "-joint-baseline-CIs-gradient-transf.svg"),
+#        plot = last_plot(), device = "svg", dpi = 300)
+```
